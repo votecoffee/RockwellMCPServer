@@ -47,6 +47,10 @@ The desktop **SDK operations… → Online edit…** dialog uses the same servic
 
 ### Routine replacement targeting
 
+For dependency-scope packaging, use [whole-routine import packages](ROUTINE_IMPORT_PACKAGES.md). The default `tag_definition_free` mode returns full routine logic with no Tag/Tags or saved-data definitions, plus a separate scope/type/dimensions/initial-value creation list. Create and verify missing prerequisites first while preserving all existing values. Optional `program_only` can bundle explicitly selected missing program helpers and keep controller creation separate; it is not a verified remedy for reported native crashes. Reports include both controller-containing and program-only generated files, without an established root cause. Do not replay those imports.
+
+Pass `routinePackagingMode` to the online planner to check that profile again. `program_only` requires a pinned `routineTagBaseline` to reject baseline-existing tag definitions/values; tag-free planning rejects every tag definition and saved value representation. These checks prepare an import; they do not establish native acceptance. For the requested create-first/full-routine-finalize sequence, choose `finalize_during_import` explicitly after prerequisite creation.
+
 Supplying an existing routine XPath to PartialImportWithTarget can append RLL content instead of replacing the routine. The planner uses the parent program XPath plus the exact routine target name for `routine` imports. Scoped policies require that parent, exact target name and a matching Routine-target XML payload; they reject the append-prone routine path. Rung imports and partial exports still address the exact routine XPath.
 
 Core and REST/MCP regressions cover the mapping and rejected broader targets. The SDK verification script checks the exported rung count and expected logic after partial imports; a successful import/build alone cannot detect an appended duplicate. Verify these postconditions on a preserved offline copy before an authorized live import.

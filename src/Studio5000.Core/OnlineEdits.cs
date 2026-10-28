@@ -6,11 +6,12 @@ namespace Studio5000.Core;
 
 public sealed record OnlineEditPlanRequest(string ControllerTargetId, string ProgramName, string RoutineName,
     SdkInputFile ImportFile, string ExpectedSha256, string? SourcePath = null, string? SourceArtifactId = null,
-    string Workflow = "accept_for_test", string ImportKind = "rungs", uint InsertPosition = 0, uint ReplaceCount = 0);
+    string Workflow = "accept_for_test", string ImportKind = "rungs", uint InsertPosition = 0, uint ReplaceCount = 0,
+    string? RoutinePackagingMode = null, MergeSnapshot? RoutineTagBaseline = null);
 public sealed record OnlineEditPlan(string PlanSha256, ControllerTarget Target, string ProgramName, string RoutineName,
     string Workflow, string SdkImportOption, bool ControllerOperationsEnabled, bool NativeBridgeConfigured,
     bool SdkTestEditsSupported, bool TestEditsObserved, bool FinalizationObserved,
-    SdkRunRequest SdkRequest, string[] StudioSteps, string CompletionEvidence);
+    SdkRunRequest SdkRequest, string[] StudioSteps, string CompletionEvidence, RoutineImportValidation? RoutinePackageValidation = null);
 
 public static partial class OnlineEdits
 {
@@ -22,6 +23,10 @@ public static partial class OnlineEdits
         testWorkflow = "Accept with SDK; Test/Untest and Assemble through Studio's observed native UI.",
         controllerTestModeIsTestEdits = false,
         branchGrammar = new { check = LadderBranchGrammar.CheckName, rejectsSingleLeg = true, rejectsEmptyLeg = true, ignoresOperandPunctuation = true, nativeCompilerAcceptance = false },
+        routineImportPackaging = new { prepare = "/api/routine-imports/prepare", defaultMode = RoutineImportPackaging.TagDefinitionFree,
+            modes = new[] { RoutineImportPackaging.TagDefinitionFree, RoutineImportPackaging.ProgramOnly },
+            routineTypes = new[] { "RLL", "ST" }, baselineRequired = true, prerequisiteSelection = "Explicit new tags absent in the pinned baseline",
+            maximumPrerequisiteTags = RoutineImportPackaging.MaximumPrerequisiteTags, createsTags = false, nativeImportAcceptance = false },
         finalization = "Choose FinalizeEdits on the initial import for API-only finalization in Run mode, with no test interval. Existing accepted edits can block further imports and require native Studio completion; there is no standalone SDK finalize/assemble call.",
         skill = "logix-online-edits", liveValidation = "Operation/version-specific; see docs/VALIDATION.md."
     };
@@ -56,6 +61,10 @@ public sealed partial class ProjectService
         if (request.ImportKind is not ("rungs" or "routine")) throw new OperationException("online_edit_kind", "Use rungs or routine.");
         if (request.ImportKind == "routine" && (request.InsertPosition != 0 || request.ReplaceCount != 0))
             throw new OperationException("online_edit_range", "Rung positions apply only to a rungs import.");
+        if (request.RoutinePackagingMode is not null && (request.ImportKind != "routine" || request.RoutinePackagingMode is not (RoutineImportPackaging.TagDefinitionFree or RoutineImportPackaging.ProgramOnly)))
+            throw new OperationException("routine_import_mode", "Use routinePackagingMode=tag_definition_free or program_only only for whole-routine imports.");
+        if (request.RoutinePackagingMode == RoutineImportPackaging.ProgramOnly && request.RoutineTagBaseline is null)
+            throw new OperationException("routine_import_baseline", "program_only planning needs the pinned routineTagBaseline to exclude existing tag definitions/values.");
         var target = ControllerAccess.Resolve(options, request.ControllerTargetId)
             ?? throw new OperationException("sdk_target_unknown", "Select an explicit controller target. Planning never enables or connects it.");
         if ((request.SourcePath is null) == (request.SourceArtifactId is null))
@@ -81,6 +90,16 @@ public sealed partial class ProjectService
             if (reader.LocalName != "RSLogix5000Content") throw new OperationException("sdk_input_invalid", "Import must be a Logix L5X component export.");
             LadderBranchGrammar.ValidateImport(reader);
         }
+        RoutineImportValidation? packageValidation = null;
+        if (request.RoutinePackagingMode is not null)
+            using (var reader = XmlReader.Create(importPath, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 64L * 1024 * 1024 }))
+            {
+                var document = System.Xml.Linq.XDocument.Load(reader, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+                packageValidation = request.RoutinePackagingMode == RoutineImportPackaging.TagDefinitionFree
+                    ? RoutineImportPackaging.ValidateTagFree(document, request.ProgramName, request.RoutineName)
+                    : RoutineImportPackaging.ValidateProgramOnly(document, request.ProgramName, request.RoutineName,
+                        XmlProjects.Parse(PreservationSource(request.RoutineTagBaseline!).Bytes));
+            }
         Dictionary<string, JsonElement> Args(object value) => JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(JsonSerializer.Serialize(value))!;
         // A routine is imported into its program. Targeting the existing RLL routine appends content.
         var arguments = Args(new { xPath = request.ImportKind == "routine" ? OnlineEdits.ProgramPath(request.ProgramName) : xpath,
@@ -103,6 +122,9 @@ public sealed partial class ProjectService
             using (var reader = XmlReader.Create(importPath, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null }))
                 SdkTargetPolicies.ValidateImport(target, run.Calls[3], System.Xml.Linq.XDocument.Load(reader));
         var steps = new List<string>();
+        if (packageValidation is not null) steps.Add(packageValidation.Mode == RoutineImportPackaging.TagDefinitionFree
+            ? "Verify separately created missing tag prerequisites in their exact scopes before import. Preserve all existing tag values; the routine payload contains no tag definitions or saved tag-value data. A checked package is not native import acceptance."
+            : "Create and verify separate controller prerequisites first. Bundled program dependencies must still be missing in the current destination; refresh/regenerate or use tag_definition_free if any now exist. Preserve existing values. program_only is not a verified remedy for reported native crashes or evidence of native import acceptance.");
         if (request.Workflow != "finalize_during_import")
         {
             steps.Add("Save the returned final.acd artifact as a new local file, open it in Studio, and confirm the exact controller/path and program/routine before reconnecting. Stop on a correlation mismatch; do not download to resolve it.");
@@ -113,9 +135,9 @@ public sealed partial class ProjectService
             steps.Add($"After successful testing, assemble accepted edits for routine {request.RoutineName} where supported, or the explicitly authorized program scope. Observe removal of the edit/test state, then save and export the resulting project.");
         }
         else steps.Add("This request finalizes during import with no test interval. Choose it on the initial import: existing accepted edits can block a subsequent import and require native Studio completion. Inspect controller mode and native edit status; SDK finalization assembles in Run mode. SDK call success alone does not prove observed assembly or functional validation.");
-        var digest = Hash(JsonSerializer.SerializeToUtf8Bytes(new { run, request.Workflow, request.ProgramName, request.RoutineName }, Json));
+        var digest = Hash(JsonSerializer.SerializeToUtf8Bytes(new { run, request.Workflow, request.ProgramName, request.RoutineName, request.RoutinePackagingMode, request.RoutineTagBaseline }, Json));
         return new(digest, target, request.ProgramName, request.RoutineName, request.Workflow, option,
             options.EnableControllerOperations, native.Available, false, false, false, run, steps.ToArray(),
-            "Plan prepared only; bounded RLL branch grammar checked. Native compiler acceptance, SDK submission and Studio test/assemble observations are separate; no controller state was read or changed.");
+            "Plan prepared only; bounded RLL branch grammar checked. Native compiler acceptance, SDK submission and Studio test/assemble observations are separate; no controller state was read or changed.", packageValidation);
     }
 }

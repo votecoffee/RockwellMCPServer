@@ -11,7 +11,10 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(159, operations.Length); Assert.Equal(159, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(160, operations.Length); Assert.Equal(160, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal("apply", operations.Single(o => o.Name == "studio_prepare_routine_import_package").Effect);
+        var routineSchema = operations.Single(o => o.Name == "studio_prepare_routine_import_package").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
+        Assert.True(routineSchema.TryGetProperty("baseline", out _)); Assert.True(routineSchema.TryGetProperty("prerequisiteTags", out _)); Assert.True(routineSchema.TryGetProperty("mode", out _));
         Assert.Equal("read", operations.Single(o => o.Name == "studio_sdk_service_status").Effect);
         Assert.Equal("control", operations.Single(o => o.Name == "studio_sdk_service_ensure_running").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_structural_edit_context").Effect);

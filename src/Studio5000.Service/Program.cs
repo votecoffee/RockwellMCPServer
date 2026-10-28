@@ -158,6 +158,7 @@ app.MapPost("/api/module-connections/browse", (ProjectService service, ModuleCon
 app.MapPost("/api/module-connections/preview", (ProjectService service, ModuleConnectionEditRequest request, CancellationToken ct) => service.PreviewModuleConnectionsAsync(request, ct));
 app.MapPost("/api/module-connections/apply", (ProjectService service, ModuleConnectionApplyRequest request, CancellationToken ct) => service.ApplyModuleConnectionsAsync(request, ct));
 app.MapPost("/api/structural-edits/context", (ProjectService service, StructuralContextRequest request, CancellationToken ct) => service.StructuralContextAsync(request, ct));
+app.MapPost("/api/routine-imports/prepare", (ProjectService service, RoutineImportPackageRequest request, CancellationToken ct) => service.PrepareRoutineImportPackageAsync(request, ct));
 app.MapPost("/api/structural-edits/context/batch", (ProjectService service, StructuralContextRequest request, CancellationToken ct) => service.StructuralContextAsync(request, ct));
 app.MapPost("/api/structural-edits/preview", (ProjectService service, StructuralEditRequest request, CancellationToken ct) => service.PreviewStructuralEditsAsync(request, ct));
 app.MapPost("/api/structural-edits/apply", (ProjectService service, StructuralApplyRequest request, CancellationToken ct) => service.ApplyStructuralEditsAsync(request, ct));
