@@ -29,8 +29,8 @@ public sealed class SdkTools(ServiceClient client)
     [McpServerTool(Name = "studio_sdk_get_job", ReadOnly = true), Description("Read an SDK job's terminal or current status, per-call results, redacted diagnostics, output artifacts and new result project. succeeded means calls and file publication completed; runtime validation remains separate.")]
     public Task<JsonElement> GetJob(string jobId, CancellationToken ct) => client.GetAsync<JsonElement>("/api/sdk/jobs/" + jobId, ct);
 
-    [McpServerTool(Name = "studio_sdk_list_jobs", ReadOnly = true), Description("List the latest 100 SDK job results across Codex, REST and the desktop GUI.")]
-    public Task<JsonElement> ListJobs(CancellationToken ct) => client.GetAsync<JsonElement>("/api/sdk/jobs", ct);
+    [McpServerTool(Name = "studio_sdk_list_jobs", ReadOnly = true), Description("Page compact SDK job summaries from the service's latest-100 window. Defaults: offset 0, limit 5; maximum limit 20. Reads at most 8 MiB (or the smaller configured response limit), including skipped jobs. A large prefix returns sdk_job_history_limit; use an earlier/smaller page or studio_sdk_get_job with a known ID. Per-call results and diagnostics remain in studio_sdk_get_job. Pages are fresh observations, not a frozen snapshot; older jobs may exist beyond the service window.")]
+    public Task<SdkJobHistoryPage> ListJobs(CancellationToken ct, int offset = 0, int limit = 5) => client.ListSdkJobsAsync(offset, limit, ct);
 
     [McpServerTool(Name = "studio_sdk_cancel_job", Destructive = true), Description("Request cancellation of a queued/running SDK process. Poll the job for completion. This does not roll back completed controller actions; interrupted execution can be indeterminate.")]
     public Task<JsonElement> CancelJob(string jobId, CancellationToken ct) => client.PostAsync<JsonElement>("/api/sdk/jobs/" + jobId + "/cancel", new { }, ct);

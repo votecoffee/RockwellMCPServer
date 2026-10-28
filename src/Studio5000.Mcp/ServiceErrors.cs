@@ -29,8 +29,8 @@ internal static class ServiceErrors
         }
         catch (McpServiceErrorException error)
         {
-            // Only bounded HTTP domain envelopes enter this path. Unknown exceptions
-            // retain the SDK's generic handling; state stays on this request alone.
+            // Bounded HTTP domain envelopes and explicit client history-policy errors
+            // enter this path. Unknown exceptions retain the SDK's generic handling.
             return new CallToolResult
             {
                 IsError = true,

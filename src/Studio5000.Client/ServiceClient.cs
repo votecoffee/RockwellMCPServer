@@ -5,7 +5,7 @@ using Studio5000.Core;
 
 namespace Studio5000.Client;
 
-public sealed class ServiceClient : IDisposable
+public sealed partial class ServiceClient : IDisposable
 {
     private HttpClient? http;
     private readonly string root;
