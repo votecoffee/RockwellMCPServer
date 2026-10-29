@@ -16,6 +16,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
             [A("logic_trace", "Trace readers, writers and dependencies")]),
         new("Rename controller tag", "Select the source project and controller tag. Preview an exact new name in the operation editor. Review scoped references, program-local shadowing and capture conflicts. Unknown operands require exact reasoned decisions. Copy reviewSha256 into Apply to publish a separate project and receipt; source/data stay unchanged. Safety changes block by default and require explicit review-only handling. Native compile and external/HMI references require separate review.",
             [A("controller_tag_rename_preview", "Preview controller-tag rename and references"), A("controller_tag_rename_apply", "Apply reviewed rename to new project")]),
+        new("Clone and retarget", "Select a fresh saved source snapshot. Fill an explicitly reviewed identity/address contract in Preview; field SHA-256 values pin decoded source values. Review simultaneous routes, paired saved representations, complete IP octet groups, string LEN/capacity, hidden AOI local paths and runtime initializer coverage. Copy the same contract and reviewSha256 into Apply to create a separate clone. Select a supplied saved readback as Candidate for comparison. Physical TCP/IP, safety/ownership and style/recipe changes require separate workflows; no native acceptance is inferred.",
+            [A("project_clone_preview", "Preview source-bound clone contract"), A("project_clone_apply", "Apply reviewed clone to new project"), A("project_clone_readback", "Compare supplied clone readback")]),
         new("Module connection timing", "Select the source project. Browse exact module/connection names, existing timing values and safety metadata; fill those identities and before-values in Preview. Supports RPI, NetworkDelayMultiplier and ReactionTimeLimit only. Safety edits block by default; explicitly choose review-only when authorized. Copy reviewSha256 into Apply to publish a separate review copy and receipt. Related values are not recalculated; native import/readback and safety acceptance remain separate.",
             [A("module_connections", "Browse connection timing and safety metadata"), A("module_connections_preview", "Preview exact connection attribute edits"), A("module_connections_apply", "Apply reviewed timing to new review copy")]),
         new("Scoped structural batch", "Inspect exact source revision/hash and element fingerprints. Bind the actual reviewed plan file/hash, exact routine/tag/UDT scopes and protected paths before previewing component/call edits. Untouched tag bytes and protected libraries stay preserved. Layout changes require owned tag replacements. Review dependency/safety findings and retain the preview receipt, then copy its ID/hash and review hash into Apply. Results are separate review copies. Use retained status after an uncertain response; native validation is separate.",
@@ -110,6 +112,7 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var version = new VersionCompatibilityRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", (int)target.Value);
         var legacy = new LegacyReviewRequest("", "", "", "Review-only legacy copy");
         var rename = new ControllerTagRenameRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", tag.Text, "");
+        var clone = new ProjectCloneRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), "Reviewed clone", [], []);
         var connections = new ModuleConnectionEditRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", [new("", "", "RPI", "", "")]);
         var structural = new StructuralEditRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, new("", ""), new([], [], []), []);
         object? request = operation switch
@@ -117,6 +120,9 @@ public sealed class DiagnosticsForm : WorkspaceForm
             "studio_logic_trace" => new LogicTraceRequest(p?.CurrentSha256 ?? "", tag.Text, selectedTag.ProgramName),
             "studio_controller_tag_rename_preview" => rename,
             "studio_controller_tag_rename_apply" => new ControllerTagRenameApplyRequest(rename, ""),
+            "studio_project_clone_preview" => clone,
+            "studio_project_clone_apply" => new ProjectCloneApplyRequest(clone, ""),
+            "studio_project_clone_readback" => new ProjectCloneReadbackRequest(clone, "", new(selectedCandidate?.Id ?? "", selectedCandidate?.CurrentSha256 ?? "")),
             "studio_module_connections" => new ModuleConnectionBrowseRequest(p?.Id ?? "", p?.CurrentSha256 ?? ""),
             "studio_module_connections_preview" => connections,
             "studio_module_connections_apply" => new ModuleConnectionApplyRequest(connections, ""),

@@ -6,6 +6,7 @@
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/logic-value-merge.md" LogicalName="Workflow.merge-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/legacy-review-copy.md" LogicalName="Workflow.legacy-review-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/controller-tag-rename.md" LogicalName="Workflow.tag-rename-reference" />
+    <EmbeddedResource Include="../../workflows/rockwell-engineering/references/project-clone.md" LogicalName="Workflow.clone-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/module-connections.md" LogicalName="Workflow.module-connections-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/structural-edits.md" LogicalName="Workflow.structural-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/routine-import-packages.md" LogicalName="Workflow.routine-import-reference" />

@@ -154,6 +154,9 @@ app.MapPost("/api/legacy-review/prepare", (ProjectService service, LegacyReviewP
 app.MapGet("/api/logix-validation/profiles", (ProjectService service) => service.LogixValidationProfiles());
 app.MapPost("/api/controller-tag-rename/preview", (ProjectService service, ControllerTagRenameRequest request, CancellationToken ct) => service.PreviewControllerTagRenameAsync(request, ct));
 app.MapPost("/api/controller-tag-rename/apply", (ProjectService service, ControllerTagRenameApplyRequest request, CancellationToken ct) => service.ApplyControllerTagRenameAsync(request, ct));
+app.MapPost("/api/project-clone/preview", (ProjectService service, ProjectCloneRequest request, CancellationToken ct) => service.PreviewProjectCloneAsync(request, ct));
+app.MapPost("/api/project-clone/apply", (ProjectService service, ProjectCloneApplyRequest request, CancellationToken ct) => service.ApplyProjectCloneAsync(request, ct));
+app.MapPost("/api/project-clone/readback", (ProjectService service, ProjectCloneReadbackRequest request, CancellationToken ct) => service.ReadbackProjectCloneAsync(request, ct));
 app.MapPost("/api/module-connections/browse", (ProjectService service, ModuleConnectionBrowseRequest request, CancellationToken ct) => service.BrowseModuleConnectionsAsync(request, ct));
 app.MapPost("/api/module-connections/preview", (ProjectService service, ModuleConnectionEditRequest request, CancellationToken ct) => service.PreviewModuleConnectionsAsync(request, ct));
 app.MapPost("/api/module-connections/apply", (ProjectService service, ModuleConnectionApplyRequest request, CancellationToken ct) => service.ApplyModuleConnectionsAsync(request, ct));

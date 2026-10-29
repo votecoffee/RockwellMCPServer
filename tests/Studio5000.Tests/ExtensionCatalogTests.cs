@@ -11,7 +11,12 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(160, operations.Length); Assert.Equal(160, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(163, operations.Length); Assert.Equal(163, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_project_clone_preview").Effect);
+        Assert.Equal("apply", operations.Single(o => o.Name == "studio_project_clone_apply").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_project_clone_readback").Effect);
+        var cloneSchema = operations.Single(o => o.Name == "studio_project_clone_preview").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
+        Assert.True(cloneSchema.TryGetProperty("identities", out _)); Assert.True(cloneSchema.TryGetProperty("addresses", out _));
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_prepare_routine_import_package").Effect);
         var routineSchema = operations.Single(o => o.Name == "studio_prepare_routine_import_package").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
         Assert.True(routineSchema.TryGetProperty("baseline", out _)); Assert.True(routineSchema.TryGetProperty("prerequisiteTags", out _)); Assert.True(routineSchema.TryGetProperty("mode", out _));
