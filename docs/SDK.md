@@ -20,6 +20,8 @@ The frozen API has **67 public signatures, 63 unique method names**: 59 domain o
 | SD card | Store/load image, load event/mode, firmware-update setting, image name/note |
 | Lifecycle | Collected/redacted status/error/progress events, handler lifecycle and disposal |
 
+The safety-signature methods address the controller/project safety signature, not a safety I/O module's SCID. The bound SDK surface has no dedicated native AOP channel-configuration or module-SCID recalculation operation. Generic tag writes, imports and builds do not establish that a changed module payload received a valid new `ConfigCRC`/`ConfigTime`/`ConfigDate` tuple. See the [safety-module configuration boundary and user-operated native handoff](SAFETY_MODULE_CONFIGURATION.md).
+
 ## Shared API and GUI
 
 Read `studio_sdk_catalog` / `GET /api/sdk/capabilities` for exact methods, parameters and enum names. SDK XPath strings start at `Controller/...`; XML editor selectors normally start at `/RSLogix5000Content/...`.

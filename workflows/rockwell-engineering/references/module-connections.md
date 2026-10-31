@@ -33,6 +33,12 @@ Inspect every change's complete original `before` and combined final `after` tim
 
 Apply with `request:{preview:<the exact reviewed preview request>,expectedReviewSha256:<reviewSha256>}`. The service recomputes the source and complete review before publishing. Stale hashes/before-values, duplicate/unsupported fields and unresolved safety handling reject apply. Retain the returned project and receipt IDs/hashes. Use normal artifact/export tools to save them to new paths. Do not automatically repeat an uncertain apply; inspect retained state first.
 
+## Channel modes and configuration signatures
+
+These timing operations do not edit safety-channel modes or `ConfigData` payloads, and do not regenerate a module's SCID (`ConfigCRC`/`ConfigTime`/`ConfigDate` where present). Decoding an exact AOP/EDS field, including a `Not Used` enum, supplies no signature algorithm or import-recalculation guarantee. A changed payload retaining the old tuple remains an unvalidated review candidate. Controller safety-signature methods are not module-SCID generators.
+
+The maintained integration has no native AOP channel-edit/recalculate operation. For separately authorized user-operated work, use a trusted offline native project copy, configure the selected module through its matching AOP, save and reopen the copy, then retain the actual Safety-view signature and fresh native export/readback. Do not assume that import, build, opening a patched file or preserving a signature repairs or validates the payload. Do not clear signature fields or remove safety locks to make a candidate pass. See the [SCID support boundary and native handoff](../../../docs/SAFETY_MODULE_CONFIGURATION.md).
+
 ## Acceptance boundary
 
 All outputs remain review copies with `nativeAcceptance:"not-performed"`. Module-profile range/coupling, output safety task timing, reaction-time calculations and retained signature applicability require independent review. Native software can recalculate timing fields when related values change; the service does not predict or silently reproduce that behavior. When separately authorized, use existing offline SDK import/export/readback and the `native-readback` profile to compare actual retained values. A file comparison does not establish native provenance, safety validation, controller behavior or deployment acceptance.
