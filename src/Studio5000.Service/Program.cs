@@ -131,6 +131,8 @@ app.MapPost("/api/projects/compare", (ProjectService service, ProjectCompareRequ
 app.MapPost("/api/projects/compare/routines", (ProjectService service, ProjectCompareRequest request) => service.CompareRoutines(request));
 app.MapPost("/api/projects/compare/ladder", (ProjectService service, LadderCompareRequest request) => service.CompareLadder(request));
 app.MapPost("/api/projects/compare/locate", (ProjectService service, LadderLocateRequest request) => service.LocateComparedLadder(request));
+app.MapPost("/api/projects/{id}/logic/timer-ownership", (ProjectService service, string id, TimerOwnershipRequest request) => service.AuditTimerOwnership(id, request));
+app.MapPost("/api/projects/{id}/logic/timer-reference-rename-preview", (ProjectService service, string id, TimerReferenceRenameRequest request) => service.PreviewTimerReferenceRename(id, request));
 app.MapPost("/api/projects/{id}/logic/selector-refactor-preview", (ProjectService service, string id, SelectorRefactorRequest request) => service.PreviewSelectorRefactor(id, request));
 app.MapPost("/api/projects/{id}/logic/trace", (ProjectService service, string id, LogicTraceRequest request) => service.TraceLogic(id, request));
 app.MapGet("/api/diagnostics/captures", (ProjectService service) => service.DiagnosticCaptures());
