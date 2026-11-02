@@ -23,6 +23,7 @@ public static partial class OnlineEdits
         testWorkflow = "Accept with SDK; Test/Untest and Assemble through Studio's observed native UI.",
         controllerTestModeIsTestEdits = false,
         branchGrammar = new { check = LadderBranchGrammar.CheckName, rejectsSingleLeg = true, rejectsEmptyLeg = true, ignoresOperandPunctuation = true, nativeCompilerAcceptance = false },
+        nativeBranchProfile = LadderPreflight.Profile(),
         routineImportPackaging = new { prepare = "/api/routine-imports/prepare", defaultMode = RoutineImportPackaging.TagDefinitionFree,
             modes = new[] { RoutineImportPackaging.TagDefinitionFree, RoutineImportPackaging.ProgramOnly },
             routineTypes = new[] { "RLL", "ST" }, baselineRequired = true, prerequisiteSelection = "Explicit new tags absent in the pinned baseline",

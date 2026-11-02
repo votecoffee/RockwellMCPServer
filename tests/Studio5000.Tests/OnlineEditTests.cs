@@ -114,6 +114,20 @@ public sealed class OnlineEditTests : IDisposable
 
     [Theory]
     [InlineData("rungs")][InlineData("routine")]
+    public async Task Import_preparation_rejects_native_branch_depth_before_dispatch(string kind)
+    {
+        var text = "XIC(Input[1,2])";
+        for (var i = 0; i < 7; i++) text = "[" + text + ",XIC(Alternate)]";
+        File.WriteAllText(import, "<RSLogix5000Content><Controller><Programs><Program Name='Main'><Routines><Routine Name='Logic' Type='RLL'><RLLContent><Rung Number='0'><Text><![CDATA[" + text + "OTE(Out);]]></Text></Rung></RLLContent></Routine></Routines></Program></Programs></Controller></RSLogix5000Content>");
+        var before = File.ReadAllBytes(import);
+        var ex = await Assert.ThrowsAsync<OperationException>(() => service.PrepareOnlineEditAsync(Request() with
+        { ImportKind = kind, ReplaceCount = kind == "routine" ? 0u : 1u, ImportFile = new(import, ProjectService.Hash(before)) }));
+        Assert.Equal("ladder_native_branch_depth", ex.Code); Assert.Contains("rung 0", ex.Message);
+        Assert.Equal(before, File.ReadAllBytes(import)); Assert.Empty(service.SdkJobList());
+    }
+
+    [Theory]
+    [InlineData("rungs")][InlineData("routine")]
     public async Task Valid_import_branches_ignore_array_operand_and_comment_punctuation(string kind)
     {
         File.WriteAllText(import, "<RSLogix5000Content><Controller><Programs><Program Name='Main'><Routines><Routine Name='Logic' Type='RLL'><RLLContent><Rung Number='0'><Comment><![CDATA[[not code]]]></Comment><Text><![CDATA[[ADD(Input[1,2],1,Result),XIC(C)]OTE(D);]]></Text></Rung><Rung Number='1'><Text><![CDATA[[XIC(A)XIC(B),XIC(C)]OTE(D);]]></Text></Rung></RLLContent></Routine></Routines></Program></Programs></Controller></RSLogix5000Content>");

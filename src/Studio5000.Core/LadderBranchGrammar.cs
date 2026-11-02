@@ -12,16 +12,19 @@ public static class LadderBranchGrammar
         internal bool Content;
         internal int Separators;
     }
-    public static void Validate(string text)
+    public static void Validate(string text) => MeasureDepth(text);
+
+    // Rendering has a resource budget of 16; native preflight applies its own documented limit.
+    public static int MeasureDepth(string text)
     {
         if (text.Length > 65536) throw new OperationException("ladder_limit", "Rung text exceeds 64 KiB.");
-        var branches = new Stack<Branch>(); var parentheses = 0; var quote = '\0'; var position = 0;
+        var branches = new Stack<Branch>(); var parentheses = 0; var quote = '\0'; var position = 0; var maximumDepth = 0;
         OperationException Error(string message) => new("invalid_ladder", message + $" At character {position}.");
         void Content() { if (branches.TryPeek(out var branch)) branch.Content = true; }
         void Begin(bool keyword)
         {
             if (branches.Count >= 16) throw new OperationException("ladder_limit", "Branch nesting exceeds 16 levels.");
-            branches.Push(new(keyword));
+            branches.Push(new(keyword)); maximumDepth = Math.Max(maximumDepth, branches.Count);
         }
         void Next(bool keyword)
         {
@@ -82,6 +85,7 @@ public static class LadderBranchGrammar
         }
         if (parentheses != 0 || quote != '\0') throw Error("Unclosed instruction operand list");
         if (branches.Count != 0) throw Error("Unclosed parallel branch");
+        return maximumDepth;
     }
 
     // Consume the already bounded, DTD-disabled import reader without loading
@@ -106,7 +110,7 @@ public static class LadderBranchGrammar
             else if (rungDepth >= 0 && reader.Depth == rungDepth + 1 && reader.LocalName == "Text")
             {
                 using var text = reader.ReadSubtree(); text.MoveToContent();
-                try { Validate(text.ReadElementContentAsString()); }
+                try { LadderPreflight.ValidateNativeDepth(text.ReadElementContentAsString()); }
                 catch (OperationException ex) { throw new OperationException(ex.Code, $"Import rung {rungNumber}: {ex.Message}"); }
             }
         }

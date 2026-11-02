@@ -101,7 +101,8 @@ public static class LadderPreview
                         if (--parentheses == 0)
                         {
                             if (brackets != 0) throw Error("Unbalanced operand index brackets");
-                            if (position > start || operands.Count > 0) operands.Add(text[start..position].Trim());
+                            var operand = text[start..position].Trim();
+                            if (operand.Length > 0 || operands.Count > 0) operands.Add(operand);
                         }
                     }
                     else if (c == '[') { if (++brackets > 32) throw new OperationException("ladder_limit", "Operand index nesting exceeds 32 levels."); }

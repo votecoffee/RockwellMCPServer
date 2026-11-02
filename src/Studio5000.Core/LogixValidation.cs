@@ -11,7 +11,7 @@ public sealed record LogixValidationRequest(string Profile, MergeSnapshot Candid
     MergeSnapshot? Reference = null, LogicValueMergeRequest? Merge = null, string? ExpectedPolicySha256 = null, NativeReadbackRules? NativeRules = null, LogixExpectedDifference[]? ExpectedDifferences = null);
 public sealed record LogixValidationFinding(string Check, string Location, string Status, string Classification, string Detail,
     string? ExpectedSha256 = null, string? ActualSha256 = null, string? ExpectedValue = null, string? ActualValue = null, bool ValuesTruncated = false);
-public sealed record LogixValidationCheck(string Name, string Status, int Compared, int Failed, int Inherited, int Expected = 0);
+public sealed record LogixValidationCheck(string Name, string Status, int Compared, int Failed, int Inherited, int Expected = 0, int Warnings = 0);
 public sealed record LogixValidationReport(int SchemaVersion, string Profile, string ToolVersion, ComparisonSnapshot Candidate,
     ComparisonSnapshot? Reference, string PolicySha256, string ReviewSha256, string Status, LogixValidationCheck[] Checks,
     LogixValidationFinding[] Findings, string[] UnsupportedCoverage, string Boundary, LogixValidationRequest Request);
@@ -26,11 +26,12 @@ internal static class LogixValidation
     {
         schemaVersion = 1, toolVersion = WorkspaceIdentity.Version,
         profiles = new[] {
-            new { id = "merge-preservation", purpose = "Validate reviewed logic while keeping all current saved values and configuration; exact MESSAGE exceptions only.", requires = "candidate + preserve-fresh merge policy + expectedPolicySha256", checks = new[]{"reviewed-program-routines-and-annotations","fresh-tag-identities-definitions-aliases","all-stored-representations","message-field-exceptions","untouched-module-task-safety-AOI-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName} },
-            new { id = "native-readback", purpose = "Compare an already supplied native export/readback with its intended saved project, without running native jobs.", requires = "candidate readback + reference intended project; optional explicit nativeRules", checks = new[]{"program-and-readable-AOI-routines","tag-definitions-aliases-and-all-representations","message-configuration","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName} },
-            new { id = "legacy-review-readback", purpose = "Review-only v35-to-v32 comparison: keep application/readable AOI code and ordinary values; report motion configuration and protected AOI envelopes/payloads separately.", requires = "candidate native v32 readback + reference intended v35 project; optional explicit nativeRules and exact expected metadata/configuration differences", checks = new[]{"target-software-controller-Local-revisions","readable-routine-code","ordinary-tag-layouts-and-values","motion-configuration","protected-AOI-envelope-and-complete-opaque-payload","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName} },
-            new { id = "offline-integrity", purpose = "Check RLL branch grammar and direct saved-project routine references; distinguish inherited/new/resolved findings against an optional baseline. Invalid branch grammar still fails when inherited.", requires = "candidate; optional baseline", checks = new[]{"direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName} }
+            new { id = "merge-preservation", purpose = "Validate reviewed logic while keeping all current saved values and configuration; exact MESSAGE exceptions only.", requires = "candidate + preserve-fresh merge policy + expectedPolicySha256", checks = new[]{"reviewed-program-routines-and-annotations","fresh-tag-identities-definitions-aliases","all-stored-representations","message-field-exceptions","untouched-module-task-safety-AOI-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck} },
+            new { id = "native-readback", purpose = "Compare an already supplied native export/readback with its intended saved project, without running native jobs.", requires = "candidate readback + reference intended project; optional explicit nativeRules", checks = new[]{"program-and-readable-AOI-routines","tag-definitions-aliases-and-all-representations","message-configuration","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck} },
+            new { id = "legacy-review-readback", purpose = "Review-only v35-to-v32 comparison: keep application/readable AOI code and ordinary values; report motion configuration and protected AOI envelopes/payloads separately.", requires = "candidate native v32 readback + reference intended v35 project; optional explicit nativeRules and exact expected metadata/configuration differences", checks = new[]{"target-software-controller-Local-revisions","readable-routine-code","ordinary-tag-layouts-and-values","motion-configuration","protected-AOI-envelope-and-complete-opaque-payload","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck} },
+            new { id = "offline-integrity", purpose = "Check RLL branch grammar, documented native nesting depth, duplicate series predicates and direct routine references. Grammar/depth failures remain blocking when inherited; predicate warnings are nonblocking.", requires = "candidate; optional baseline", checks = new[]{"direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck} }
         }, maximumXmlElements = 1000000, maximumFindings = 10000, maximumReceiptBytes = 8 * 1024 * 1024,
+        nativeBranchProfile = LadderPreflight.Profile(), predicateWarnings = "Nonblocking exact duplicates within uninterrupted supported-predicate series paths; no rewrite or scan equivalence.",
         nativeRules = new NativeReadbackRules(),
         annotationBoundaryRule = "Opt-in normalizeAnnotationBoundaryWhitespace applies only to scalar Comment/Description outside stored/encoded data. XML space/tab/CR/LF at the boundaries only; internal text, attributes and markup remain exact. Each normalization is retained as a pass/normalized finding with field hashes and bounded before/after text. Readback profiles only.",
         maximumExpectedDifferences = 1000,
@@ -172,6 +173,21 @@ internal static class LogixValidation
         }
         return (compared, findings);
     }
+    private static (int Compared, Dictionary<string, (string Check, string Location, string Status, string Detail, string Hash)> Findings) RllPreflights(XDocument doc)
+    {
+        var findings = new Dictionary<string, (string, string, string, string, string)>(StringComparer.Ordinal); var compared = 0;
+        foreach (var rung in doc.Descendants("Routine").Where(r => (string?)r.Attribute("Type") == "RLL").Elements("RLLContent").Elements("Rung"))
+        {
+            compared++; var text = (string?)rung.Element("Text") ?? ""; var path = XmlProjects.PathOf(rung); var hash = LogixPreservation.TextHash(text)!;
+            foreach (var finding in LadderPreflight.Inspect(text).Findings)
+            {
+                if (findings.Count >= 10000) throw new OperationException("validation_limit", "More than 10000 RLL preflight findings; no partial report was produced.");
+                var location = path + "/" + finding.Path;
+                findings.Add(finding.Check + "/" + location + "/" + hash, (finding.Check, location, finding.Status, finding.Detail, hash));
+            }
+        }
+        return (compared, findings);
+    }
     public static LogixValidationReport Run(LogixValidationRequest request, ProjectInfo candidate, XDocument actual,
         ProjectInfo? reference, XDocument? expected, XDocument? reviewed, XDocument? baseline)
     {
@@ -181,8 +197,8 @@ internal static class LogixValidation
         var rules = request.NativeRules ?? new(); var fields = request.Merge?.ConfigurationFields ?? [];
         if (rules.NormalizeProtectedPayloadWhitespace && !legacy) throw new OperationException("validation_policy", "Protected payload normalization is available in legacy-review-readback only.");
         var exceptions = request.ExpectedDifferences ?? [];
-        if (exceptions.Any(e => e?.Check == LadderBranchGrammar.CheckName))
-            throw new OperationException("validation_policy", "Malformed or unsupported RLL branch grammar cannot be waived as an expected native difference.");
+        if (exceptions.Any(e => e?.Check is LadderBranchGrammar.CheckName or LadderPreflight.DepthCheck or LadderPreflight.DuplicateCheck))
+            throw new OperationException("validation_policy", "RLL grammar, depth and predicate findings cannot be waived as expected native differences.");
         if (exceptions.Length > 1000 || (!nativeComparison && exceptions.Length > 0) || exceptions.Any(e => e is null || string.IsNullOrWhiteSpace(e.Reason) || e.Reason.Length > 500 || string.IsNullOrWhiteSpace(e.Location) || e.Location.Length > 8192 || string.IsNullOrWhiteSpace(e.Check) || e.Check.Length > 128 ||
             (e.ExpectedSha256 is null && e.ActualSha256 is null) || (e.ExpectedSha256 is not null && !Regex.IsMatch(e.ExpectedSha256, "^[a-fA-F0-9]{64}$")) || (e.ActualSha256 is not null && !Regex.IsMatch(e.ActualSha256, "^[a-fA-F0-9]{64}$"))))
             throw new OperationException("validation_policy", "Use at most 1000 exact, reasoned, hash-bound native-readback differences; no wildcard approval.");
@@ -361,6 +377,13 @@ internal static class LogixValidation
         if (oldBranches is not null)
             foreach (var (key, value) in oldBranches.Where(v => !currentBranches.Findings.ContainsKey(v.Key)))
                 findings.Add(new(LadderBranchGrammar.CheckName, value.Location, "pass", "resolved", value.Detail, ExpectedSha256: value.Hash));
+        var oldPreflight = baseline is null ? null : RllPreflights(baseline).Findings; var currentPreflight = RllPreflights(actual);
+        counts[LadderPreflight.DepthCheck] = currentPreflight.Compared; counts[LadderPreflight.DuplicateCheck] = currentPreflight.Compared;
+        foreach (var (key, value) in currentPreflight.Findings)
+            findings.Add(new(value.Check, value.Location, value.Status, oldPreflight?.ContainsKey(key) == true ? "inherited" : "new", value.Detail, ActualSha256: value.Hash));
+        if (oldPreflight is not null)
+            foreach (var (key, value) in oldPreflight.Where(v => !currentPreflight.Findings.ContainsKey(v.Key)))
+                findings.Add(new(value.Check, value.Location, "pass", "resolved", value.Detail, ExpectedSha256: value.Hash));
         foreach (var exception in exceptions)
         {
             var matches = findings.Select((finding, index) => (finding, index)).Where(v => v.finding.Status == "fail" && v.finding.Classification == "new" && v.finding.Check == exception.Check && v.finding.Location == exception.Location &&
@@ -369,10 +392,10 @@ internal static class LogixValidation
             var match = matches[0]; findings[match.index] = match.finding with { Status = "pass", Classification = "expected", Detail = "Reviewed expected difference: " + exception.Reason + ". " + match.finding.Detail };
         }
         if (findings.Count > 10000) throw new OperationException("validation_limit", "More than 10000 findings; no partial receipt was produced.");
-        static bool Fails(LogixValidationFinding finding) => finding.Status == "fail" && (finding.Classification == "new" || finding.Check == LadderBranchGrammar.CheckName);
+        static bool Fails(LogixValidationFinding finding) => finding.Status == "fail" && (finding.Classification == "new" || finding.Check is LadderBranchGrammar.CheckName or LadderPreflight.DepthCheck);
         var checks = counts.Select(k => new LogixValidationCheck(k.Key,
             findings.Any(f => f.Check == k.Key && Fails(f)) ? "fail" : findings.Any(f => f.Check == k.Key && f.Status == "unsupported") ? "unsupported" : "pass", k.Value,
-            findings.Count(f => f.Check == k.Key && Fails(f)), findings.Count(f => f.Check == k.Key && f.Classification == "inherited"), findings.Count(f => f.Check == k.Key && f.Classification == "expected"))).ToArray();
+            findings.Count(f => f.Check == k.Key && Fails(f)), findings.Count(f => f.Check == k.Key && f.Classification == "inherited"), findings.Count(f => f.Check == k.Key && f.Classification == "expected"), findings.Count(f => f.Check == k.Key && f.Status == "warning"))).ToArray();
         var policyHash = request.Profile == "merge-preservation" ? LogixPreservation.PolicyHash(request.Merge!) : ProjectService.Hash(JsonSerializer.SerializeToUtf8Bytes(new { request.Profile, request.Reference, request.NativeRules, request.ExpectedDifferences }, ProjectService.Json));
         var unsupported = new[] { "Native import/build execution and provenance are not established by supplied files.", "Safety semantics, dynamic/AOI parameter binding and complete instruction/reference compilation are not checked.", "Stored representations are compared, not decoded to prove cross-encoding semantic equivalence or simultaneous live values.", "Runtime, live values and physical/commissioning acceptance are not checked." };
         if (legacy) unsupported = [..unsupported, "Protected AOI semantics are uninspected. Matching envelope metadata, matching payload bytes or explicitly reviewed re-encoding differences do not establish opaque-code equivalence."];
