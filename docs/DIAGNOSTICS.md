@@ -86,3 +86,5 @@ REST: `POST /api/version-compatibility/preview`, `/api/version-compatibility/sta
 Preservation/integrity profiles also apply the documented six-level nested RLL branch preflight and nonblocking exact duplicate-series-predicate warnings. These checks distinguish control branches from array operands and retain source-bound inherited/resolved findings. See [RLL preflight coverage](VALIDATION.md#rll-branch-preflight).
 
 **Selector refactor preview** in the diagnostic workflow panel returns proposed current-route BOOL tags and replacement rungs for a pinned saved selector. It preserves DINT MOV operands/write order and continuation gates, rejects unsupported dependencies/control flow, and never applies or imports changes. See [selector preview coverage](VALIDATION.md#selector-refactor-preview).
+
+The same validation profiles include bounded static RLL AOI argument linkage: caller-scope aliases/member paths, scalar STRING/UDT InOut identities, supported optional layouts and inherited failures. Dynamic/array/MODULE bindings and complete native compilation remain unsupported. See [AOI linkage coverage](VALIDATION.md#static-aoi-argument-linkage).
