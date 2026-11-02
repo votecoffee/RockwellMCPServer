@@ -14,6 +14,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
     private static readonly Workflow[] Workflows = [
         new("Logic tracing", "Select the modified/project snapshot, a tag and optional program. Trace readers/writers and dependencies across routines, aliases and AOI parameters. Review diagnostics for unknown effects, addressing and protected source.",
             [A("logic_trace", "Trace readers, writers and dependencies")]),
+        new("Selector refactor preview", "Select a saved program RLL routine/rung in the operation editor and a fresh program tag prefix. Preview current OTE route summaries before the original DINT MOVs and a combined final setup. Review preserved operands/write order and unsupported dependencies. No project changes or native acceptance.",
+            [A("selector_refactor_preview", "Preview source-bound selector route summaries")]),
         new("Rename controller tag", "Select the source project and controller tag. Preview an exact new name in the operation editor. Review scoped references, program-local shadowing and capture conflicts. Unknown operands require exact reasoned decisions. Copy reviewSha256 into Apply to publish a separate project and receipt; source/data stay unchanged. Safety changes block by default and require explicit review-only handling. Native compile and external/HMI references require separate review.",
             [A("controller_tag_rename_preview", "Preview controller-tag rename and references"), A("controller_tag_rename_apply", "Apply reviewed rename to new project")]),
         new("Clone and retarget", "Select a fresh saved source snapshot. Fill an explicitly reviewed identity/address contract in Preview; field SHA-256 values pin decoded source values. Review simultaneous routes, paired saved representations, complete IP octet groups, string LEN/capacity, hidden AOI local paths and runtime initializer coverage. Copy the same contract and reviewSha256 into Apply to create a separate clone. Select a supplied saved readback as Candidate for comparison. Physical TCP/IP, safety/ownership and style/recipe changes require separate workflows; no native acceptance is inferred.",
@@ -117,6 +119,7 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var structural = new StructuralEditRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, new("", ""), new([], [], []), []);
         object? request = operation switch
         {
+            "studio_selector_refactor_preview" => new SelectorRefactorRequest(p?.CurrentSha256 ?? "", "/RSLogix5000Content/Controller/Programs/Program[@Name='" + program.Text + "']/Routines/Routine[@Name='main']", 0, "SelectorRoute"),
             "studio_logic_trace" => new LogicTraceRequest(p?.CurrentSha256 ?? "", tag.Text, selectedTag.ProgramName),
             "studio_controller_tag_rename_preview" => rename,
             "studio_controller_tag_rename_apply" => new ControllerTagRenameApplyRequest(rename, ""),
@@ -149,7 +152,7 @@ public sealed class DiagnosticsForm : WorkspaceForm
             "studio_trend_export" => new TrendExportRequest(new(view?.Id ?? "", view?.Revision ?? 0), ""), _ => null
         };
         var seed = new JsonObject(); if (request is not null) seed["request"] = JsonSerializer.SerializeToNode(request, ProjectService.Json);
-        if (operation == "studio_logic_trace") seed["projectId"] = p?.Id ?? "";
+        if (operation is "studio_logic_trace" or "studio_selector_refactor_preview") seed["projectId"] = p?.Id ?? "";
         if (operation.Contains("episode", StringComparison.Ordinal) || operation is "studio_diagnostic_trigger_arm" or "studio_diagnostic_trigger_delete") seed["triggerId"] = trigger?.Definition.Id ?? "";
         if (operation.Contains("episode", StringComparison.Ordinal)) seed["episodeId"] = trigger?.Episodes.FirstOrDefault()?.Id ?? "";
         if (operation is "studio_trend_view_get" or "studio_trend_view_delete") seed["trendId"] = view?.Id ?? "";
