@@ -1,5 +1,7 @@
 # Service manager reporting
 
+The local .NET service publishes with workstation garbage collection (`ServerGarbageCollection=false`). This limits the idle memory cost of a service sharing a workstation with engineering applications. [Microsoft documents the GC tradeoffs](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/workstation-server-gc); server GC targets higher throughput and uses a heap and collection thread per logical CPU. A deployment with a measured throughput requirement can explicitly build with `-p:ServerGarbageCollection=true` and validate its own workload.
+
 Rockwell can explicitly select the reviewed `universal-codex-tools==26.1103.174507` management interface through an app-owned Python supervisor for its .NET service. The normal standalone plugin connects to the .NET MCP adapter and does not require this optional supervisor or framework MCP front door. No universal plugin, additional manager instance, Tasks, Skills API, OAuth, Apps UI or Redis profile is activated by normal standalone installation.
 
 The Windows MCP Service Manager is a separate shared application. This app does not install or start another manager. Follow the framework's [manager documentation](https://github.com/votecoffee/CodexMCPBroker/blob/0efbb9473d61b42c774e3cf30af558116d747844/docs/service-management.md) if a manager is needed.

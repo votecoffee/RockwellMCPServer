@@ -82,8 +82,15 @@ public sealed class WindowsResourceProcessDriver : IResourceProcessDriver
     {
         using var handle = OpenPid(pid, false);
         if (!handle.Alive) return null;
-        if (!IsProcessInJob(handle.SafeHandle, job, out var member)) throw new Win32Exception(Marshal.GetLastWin32Error());
-        return member ? handle.Identity : null;
+        try
+        {
+            if (!IsProcessInJob(handle.SafeHandle, job, out var member)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            return member ? handle.Identity : null;
+        }
+        // A member can exit between the initial wait and its image query.
+        // Only this same opened, now-signaled handle proves that departure;
+        // live/unqueryable handles still propagate the original query failure.
+        catch (Win32Exception) when (!handle.Alive) { return null; }
     }
     private NativeHandle OpenPid(uint pid, bool terminate)
     {

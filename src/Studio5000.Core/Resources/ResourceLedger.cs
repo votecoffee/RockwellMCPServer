@@ -82,16 +82,29 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             { Thread.Sleep(delay); delay = Math.Min(50, delay * 2); }
         }
     }
-    private static void PrivateDirectory(string path)
+    internal static bool PrivateDirectory(string path)
     {
         ProjectService.RejectLinks(path); Directory.CreateDirectory(path); ProjectService.RejectLinks(path);
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         using var current = WindowsIdentity.GetCurrent();
         var user = current.User ?? throw new InvalidOperationException("Cannot identify the resource registry owner.");
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        var directory = new DirectoryInfo(path);
+        var existing = directory.GetAccessControl(AccessControlSections.Access);
+        var rules = existing.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToArray();
+        var expected = new HashSet<string>(StringComparer.Ordinal) { user.Value, system.Value };
+        var matches = existing.AreAccessRulesProtected && rules.Length == expected.Count;
+        foreach (var rule in rules)
+            if (rule.AccessControlType != AccessControlType.Allow || rule.FileSystemRights != FileSystemRights.FullControl ||
+                rule.InheritanceFlags != (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit) ||
+                rule.PropagationFlags != PropagationFlags.None || rule.IsInherited || !expected.Remove(rule.IdentityReference.Value))
+                matches = false;
+        if (matches) return false;
         var security = new DirectorySecurity(); security.SetAccessRuleProtection(true, false);
-        foreach (var sid in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) })
+        foreach (var sid in new[] { user, system })
             security.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-        new DirectoryInfo(path).SetAccessControl(security);
+        directory.SetAccessControl(security);
+        return true;
     }
     internal void Save(ResourceRecord record)
     {
