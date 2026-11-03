@@ -94,6 +94,10 @@ class Driver:
             def resume(self):
                 self.resumed = True
 
+            @property
+            def returncode(self):
+                return None if driver.state(identity) == "alive" else 0
+
             def identities(self):
                 return [identity] if driver.state(identity) == "alive" else []
 
