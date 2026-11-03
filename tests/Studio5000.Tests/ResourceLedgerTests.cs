@@ -87,6 +87,27 @@ public sealed class ResourceLedgerTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => owner.Cleanup(record.ResourceId, ledger.Get(record.ResourceId).Revision, new('e', 32)));
         Assert.Equal(1, driver.Effects);
     }
+    private sealed class Group(ProcessIdentity identity, ProcessIdentity member) : IResourceProcessGroup
+    {
+        public ProcessIdentity Identity => identity;
+        public int Effects;
+        public ProcessIdentity[] Identities() => [identity, member];
+        public void Stop() => Effects++;
+    }
+    [Fact]
+    public void NewlyObservedGroupMemberStillChecksEveryRetainedClaimBeforeCleanup()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = Ledger(); var owner = ledger.Owner("rockwell-fixture");
+        driver.Live[100] = Driver.Identity(100); driver.Live[101] = Driver.Identity(101);
+        var worker = owner.BindProcess(owner.BeginLaunch("Private group", cleanupMode: "terminate").ResourceId, 100, "windows_job");
+        var attachment = owner.BindProcess(owner.BeginLaunch("Attached descendant", ownership: "attached").ResourceId, 101);
+        var group = new Group(driver.Live[100], driver.Live[101]);
+        Assert.Throws<InvalidOperationException>(() => owner.Cleanup(worker.ResourceId, worker.Revision, new('d', 32), group));
+        Assert.Equal(0, group.Effects); Assert.Equal(0, driver.Effects);
+        Assert.Equal(worker.Revision, ledger.Get(worker.ResourceId).Revision);
+        Assert.Equal(attachment.Revision, ledger.Get(attachment.ResourceId).Revision);
+    }
     [Fact]
     public async Task SlowCleanupReleasesTheGlobalLockAndDuplicateRequestCannotDispatchAgain()
     {

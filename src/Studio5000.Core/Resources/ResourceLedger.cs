@@ -122,10 +122,11 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     { record = (record with { UpdatedAt = Now }).Normalize(); Save(record); return record; }
     public ResourceOwner Owner(string appId)
     { ResourceRules.Name(appId); return new(this, appId, Guid.NewGuid().ToString("N"), driver.CurrentIdentity().Normalize()); }
-    internal bool Conflict(ResourceRecord record)
+    // Callers may reuse a full corpus only within the same held ledger lock.
+    internal bool Conflict(ResourceRecord record, ResourceRecord[]? lockedRecords = null)
     {
         var identities = record.Members.ToHashSet(); if (record.Process is not null) identities.Add(record.Process);
-        return identities.Count != 0 && Records().Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
+        return identities.Count != 0 && (lockedRecords ?? Records()).Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
             // An app-owned service may retire its own inner job while the
             // Python supervisor retains the outer job. This is delegation only
             // from the exact root process identity, never another attachment,
@@ -188,7 +189,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             var record = new ResourceRecord { ResourceId = id, AppId = AppId, OwnerId = OwnerId, Owner = Identity,
                 Label = label, Kind = "mcp-adapter", Ownership = "private", CleanupMode = "terminate", State = "active",
                 Process = process, Containment = "windows_job", CreatedAt = Now, UpdatedAt = Now }.Normalize();
-            if (ledger.Conflict(record)) throw new InvalidOperationException("Another retained claim references the suspended adapter.");
+            if (ledger.Conflict(record, records)) throw new InvalidOperationException("Another retained claim references the suspended adapter.");
             ledger.Save(record); return record;
         });
         // A native SDK/COM connection may identify a shared software/session
@@ -374,14 +375,15 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
                         if (record.Receipt.RequestId == requestId && record.Receipt.ExpectedRevision == revision) return record.Receipt;
                         throw new InvalidOperationException("Cleanup already claimed; inspect its retained receipt instead of replaying.");
                     }
-                    if (record.Revision != revision || ledger.Records().Any(r => r.Receipt?.RequestId == requestId)) throw new InvalidOperationException("Cleanup revision/request identity conflict.");
-                    if (record.Ownership != "private" || record.CleanupMode != "terminate" || record.State != "active" || record.RecoveryBarrier is not null || record.Process is null || ledger.Conflict(record))
+                    var records = ledger.Records();
+                    if (record.Revision != revision || records.Any(r => r.Receipt?.RequestId == requestId)) throw new InvalidOperationException("Cleanup revision/request identity conflict.");
+                    if (record.Ownership != "private" || record.CleanupMode != "terminate" || record.State != "active" || record.RecoveryBarrier is not null || record.Process is null || ledger.Conflict(record, records))
                         throw new InvalidOperationException("Resource policy, recovery barrier or another retained claim blocks cleanup.");
                     if (group is not null)
                     {
                         if (record.Containment != "windows_job" || group.Identity.Normalize() != record.Process) throw new InvalidOperationException("Process group is not this exact owned resource.");
                         var candidate = (record with { Members = group.Identities() }).Normalize();
-                        if (ledger.Conflict(candidate)) throw new InvalidOperationException("Another retained claim references a process-tree member.");
+                        if (ledger.Conflict(candidate, records)) throw new InvalidOperationException("Another retained claim references a process-tree member.");
                         if (!candidate.Members.SequenceEqual(record.Members)) record = ledger.Replace(candidate);
                     }
                     var identity = record.Process ?? throw new InvalidOperationException("Resource process identity was lost.");
