@@ -6,7 +6,7 @@ Shared Rockwell engineering service with MCP, REST, a desktop GUI and reloadable
 
 Optional [bounded MCP frontdoor profiles](docs/MCP_FRONTDOOR.md) admit stateless chat connections separately from engineering workers. The selected profile keeps shared-service, native and controller limits intact while bounding startup, forwarding and protocol memory.
 
-The immutable frontdoor policy can select `existing-genuine-only` to use an already-running verified service. That mode cannot start or replace the service; owner loss returns an undispatched refusal until a new connection is opened after recovery. Service autostart uses the separate `ensure-pinned-offline` scope.
+The immutable frontdoor policy can select `existing-genuine-only` to use an already-running verified service. Before any owner is verified, a later explicit request may observe again after a faulted discovery. That mode cannot start or replace the service; owner loss returns an undispatched refusal until a new connection is opened after recovery. See [existing-service readiness](docs/MCP_READINESS.md). Service autostart uses the separate `ensure-pinned-offline` scope.
 
 [CodexMCPBroker](https://github.com/votecoffee/CodexMCPBroker) provides the separately maintained shared application framework and Windows MCP Service Manager. Rockwell remains a standalone MCP server with its own app-owned Codex plugin and skills. The optional framework host and separate management app require no universal plugin; Rockwell retains reviewed dependency pins and deployment-specific acceptance.
 
