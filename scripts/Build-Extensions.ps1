@@ -1,4 +1,4 @@
-param([string]$PackageRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'extensions'), [string]$Version, [ValidateRange(1,4)][int]$ParallelWorkers = 4, [switch]$ContentVersion, [switch]$SelectOnStartup)
+param([string]$PackageRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'extensions'), [string]$Version, [ValidateRange(1,4)][int]$ParallelWorkers = 4, [bool]$ReleaseIdleWorkers = $true, [switch]$ContentVersion, [switch]$SelectOnStartup)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ReleaseVersion.ps1')
 if (!$Version) { $Version = (Get-RockwellRelease (Split-Path -Parent $PSScriptRoot)).packageVersion }
@@ -18,7 +18,7 @@ foreach ($path in $paths) {
     $files[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 if ($ContentVersion) {
-    $identity = @('contract=1', 'assembly=Studio5000.Extensions.Rockwell.dll', ('parallelWorkers=' + $ParallelWorkers)) + @($modules | ForEach-Object { "module=$($_[0]):$($_[1])" }) + @($files.Keys | ForEach-Object { $_ + ':' + $files[$_] })
+    $identity = @('contract=1', 'assembly=Studio5000.Extensions.Rockwell.dll', ('parallelWorkers=' + $ParallelWorkers), ('releaseIdleWorkers=' + $ReleaseIdleWorkers)) + @($modules | ForEach-Object { "module=$($_[0]):$($_[1])" }) + @($files.Keys | ForEach-Object { $_ + ':' + $files[$_] })
     $hasher = [Security.Cryptography.SHA256]::Create()
     try { $digest = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($identity -join "`n")))).Replace('-', '').ToLowerInvariant() }
     finally { $hasher.Dispose() }
@@ -29,7 +29,7 @@ foreach ($module in $modules) {
     $existing = Join-Path $PackageRoot "$($module[0])/versions/$Version/manifest.json"
     if (Test-Path -LiteralPath $existing) {
         $manifest = Get-Content -LiteralPath $existing -Raw | ConvertFrom-Json
-        $same = $manifest.id -ceq $module[0] -and $manifest.version -ceq $Version -and $manifest.contractVersion -eq 1 -and $manifest.parallelWorkers -eq $ParallelWorkers -and
+        $same = $manifest.id -ceq $module[0] -and $manifest.version -ceq $Version -and $manifest.contractVersion -eq 1 -and $manifest.parallelWorkers -eq $ParallelWorkers -and ([bool]$manifest.releaseIdleWorkers) -eq $ReleaseIdleWorkers -and
             $manifest.entryAssembly -ceq 'Studio5000.Extensions.Rockwell.dll' -and $manifest.entryType -ceq "Studio5000.Extensions.Rockwell.$($module[1])" -and
             @($manifest.files.PSObject.Properties).Count -eq $files.Count
         foreach ($relative in $files.Keys) {
@@ -38,7 +38,7 @@ foreach ($module in $modules) {
         if (!$same) { throw "Package $($module[0]) $Version has different bytes. Supply a new -Version." }
         Write-Output "Reusing immutable package $($module[0]) $Version"
     } else {
-        & (Join-Path $PSScriptRoot 'Publish-Extension.ps1') -Id $module[0] -Version $Version -ParallelWorkers $ParallelWorkers -PublishedDirectory $published -EntryAssembly 'Studio5000.Extensions.Rockwell.dll' -EntryType "Studio5000.Extensions.Rockwell.$($module[1])" -PackageRoot $PackageRoot
+        & (Join-Path $PSScriptRoot 'Publish-Extension.ps1') -Id $module[0] -Version $Version -ParallelWorkers $ParallelWorkers -ReleaseIdleWorkers:$ReleaseIdleWorkers -PublishedDirectory $published -EntryAssembly 'Studio5000.Extensions.Rockwell.dll' -EntryType "Studio5000.Extensions.Rockwell.$($module[1])" -PackageRoot $PackageRoot
     }
 }
 if ($SelectOnStartup) {

@@ -21,14 +21,26 @@ public sealed class ExtensionHostTests : IDisposable
         options = new() { StateDirectory = Path.Combine(root, "state"), ExtensionsDirectory = Path.Combine(root, "packages") };
         host = new(options, root, (_, _) => { var worker = new FakeWorker(next, workers.Count + 1); workers.Add(worker); return worker; });
     }
-    private void Package(string version, bool badHash = false, int contract = 1, string file = "fixture.dll")
+    private void Package(string version, bool badHash = false, int contract = 1, string file = "fixture.dll", bool releaseIdleWorkers = false)
     {
         var dir = Path.Combine(options.ExtensionsDirectory, "demo", "versions", version); Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "fixture.dll"), "fixture " + version);
         File.WriteAllText(Path.Combine(dir, "manifest.json"), JsonSerializer.Serialize(new ExtensionPackage("demo", version, contract,
-            "fixture.dll", "Fixture", new() { [file] = badHash ? new string('0', 64) : ProjectService.Hash(File.ReadAllBytes(Path.Combine(dir, "fixture.dll"))) }), ExtensionProtocol.Json));
+            "fixture.dll", "Fixture", new() { [file] = badHash ? new string('0', 64) : ProjectService.Hash(File.ReadAllBytes(Path.Combine(dir, "fixture.dll"))) }, ReleaseIdleWorkers: releaseIdleWorkers), ExtensionProtocol.Json));
     }
     private static ExtensionCall Call(ExtensionSummary summary, object? arguments = null) => new("demo", "echo", summary.Generation, J(arguments ?? new { text = "hi" }));
+
+    [Fact]
+    public async Task ManifestOptInReleasesSingleWorkerAfterCatalogAndCompletedInvocation()
+    {
+        Package("idle", releaseIdleWorkers: true);
+        var summary = await host.ReloadAsync(new("demo", "idle"));
+        Assert.True(summary.ReleaseIdleWorkers); Assert.True(Assert.Single(workers).Disposed);
+        var reply = await host.InvokeAsync("read", Call(summary));
+        Assert.Equal(2, reply.GetProperty("worker").GetInt32());
+        Assert.Equal(2, workers.Count); Assert.All(workers, worker => Assert.True(worker.Disposed));
+        Assert.Equal(0, host.ManagementActivity());
+    }
 
     [Fact]
     public async Task ReloadPinsRunningJobAndPublishesNewGenerationAtomically()

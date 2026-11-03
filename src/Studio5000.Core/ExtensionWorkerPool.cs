@@ -7,6 +7,7 @@ namespace Studio5000.Core;
 public sealed class ExtensionWorkerPool : IExtensionWorker
 {
     private readonly Func<IExtensionWorker> factory;
+    private readonly bool releaseIdleWorkers;
     private readonly SemaphoreSlim slots, describeGate = new(1);
     private readonly object sync = new();
     private readonly Queue<IExtensionWorker> idle = new();
@@ -15,20 +16,32 @@ public sealed class ExtensionWorkerPool : IExtensionWorker
     private ExtensionOperation[]? operations;
     private string? catalog;
     private bool disposed;
-    public ExtensionWorkerPool(int maximumWorkers, Func<IExtensionWorker> factory)
+    public ExtensionWorkerPool(int maximumWorkers, Func<IExtensionWorker> factory, bool releaseIdleWorkers = false)
     {
         if (maximumWorkers is < 1 or > 4) throw new ArgumentOutOfRangeException(nameof(maximumWorkers));
-        this.factory = factory; slots = new(maximumWorkers, maximumWorkers);
-        var worker = factory(); workers.Add(worker); idle.Enqueue(worker);
+        this.factory = factory; this.releaseIdleWorkers = releaseIdleWorkers; slots = new(maximumWorkers, maximumWorkers);
+        if (!releaseIdleWorkers) { var worker = factory(); workers.Add(worker); idle.Enqueue(worker); }
     }
     public async Task<ExtensionOperation[]> DescribeAsync(CancellationToken ct)
     {
-        await describeGate.WaitAsync(ct);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, shutdown.Token);
+        await describeGate.WaitAsync(linked.Token);
         try
         {
+            lock (sync) ObjectDisposedException.ThrowIf(disposed, this);
             if (operations is not null) return operations.ToArray();
-            var worker = idle.Peek(); var result = await worker.DescribeAsync(ct);
-            catalog = JsonSerializer.Serialize(result, ExtensionProtocol.Json); operations = result; return result.ToArray();
+            var worker = releaseIdleWorkers ? CreateWorker() : idle.Peek();
+            try
+            {
+                var result = await worker.DescribeAsync(linked.Token);
+                lock (sync)
+                {
+                    ObjectDisposedException.ThrowIf(disposed, this);
+                    catalog = JsonSerializer.Serialize(result, ExtensionProtocol.Json); operations = result;
+                }
+                return result.ToArray();
+            }
+            finally { if (releaseIdleWorkers) ReleaseWorker(worker); }
         }
         finally { describeGate.Release(); }
     }
@@ -44,8 +57,8 @@ public sealed class ExtensionWorkerPool : IExtensionWorker
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
                 if (idle.Count != 0) worker = idle.Dequeue();
-                else { worker = factory(); workers.Add(worker); fresh = true; }
             }
+            if (worker is null) { worker = CreateWorker(); fresh = true; }
             if (fresh && JsonSerializer.Serialize(await worker.DescribeAsync(linked.Token), ExtensionProtocol.Json) != catalog)
             { reusable = false; throw new OperationException("invalid_extension", "Parallel worker catalog differs from the validated generation."); }
             return await worker.InvokeAsync(operation, arguments, linked.Token);
@@ -54,21 +67,43 @@ public sealed class ExtensionWorkerPool : IExtensionWorker
         { reusable = false; throw; }
         finally
         {
-            if (worker is not null)
+            try
             {
-                lock (sync)
+                if (worker is not null)
                 {
-                    if (disposed || !reusable) { workers.Remove(worker); reusable = false; } else idle.Enqueue(worker);
+                    var release = false;
+                    lock (sync)
+                    {
+                        if (disposed || !reusable || releaseIdleWorkers) release = workers.Remove(worker);
+                        else idle.Enqueue(worker);
+                    }
+                    if (release) worker.Dispose();
                 }
-                if (!reusable) worker.Dispose();
             }
-            slots.Release();
+            finally { slots.Release(); }
         }
+    }
+    private IExtensionWorker CreateWorker()
+    {
+        // Process creation/admission stays outside the pool lock. If shutdown
+        // wins the race, dispose only the worker this factory just returned.
+        var worker = factory();
+        lock (sync) { if (!disposed) { workers.Add(worker); return worker; } }
+        worker.Dispose(); throw new ObjectDisposedException(nameof(ExtensionWorkerPool));
+    }
+    private void ReleaseWorker(IExtensionWorker worker)
+    {
+        bool owned; lock (sync) owned = workers.Remove(worker);
+        if (owned) worker.Dispose();
     }
     public void Dispose()
     {
         IExtensionWorker[] owned;
         lock (sync) { if (disposed) return; disposed = true; owned = workers.ToArray(); workers.Clear(); idle.Clear(); }
-        shutdown.Cancel(); foreach (var worker in owned) worker.Dispose();
+        List<Exception> errors = [];
+        try { shutdown.Cancel(); } catch (Exception error) { errors.Add(error); }
+        foreach (var worker in owned)
+            try { worker.Dispose(); } catch (Exception error) { errors.Add(error); }
+        if (errors.Count != 0) throw new AggregateException("One or more extension workers could not be disposed; inspect retained ownership.", errors);
     }
 }

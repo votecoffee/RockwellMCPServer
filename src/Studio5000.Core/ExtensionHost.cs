@@ -131,7 +131,8 @@ public sealed class ExtensionHost : IDisposable
             if (File.Exists(ledger) && File.ReadAllText(ledger) != hash) throw Error("invalid_extension", "Version was previously loaded with different bytes; publish a new version.");
             File.WriteAllBytes(Path.Combine(snapshot, "manifest.json"), bytes);
             var assemblyPath = SafePath(snapshot, package.EntryAssembly.Split('/'));
-            worker = package.ParallelWorkers == 1 ? createWorker(assemblyPath, package.EntryType) : new ExtensionWorkerPool(package.ParallelWorkers, () => createWorker(assemblyPath, package.EntryType));
+            worker = package.ParallelWorkers == 1 && !package.ReleaseIdleWorkers ? createWorker(assemblyPath, package.EntryType)
+                : new ExtensionWorkerPool(package.ParallelWorkers, () => createWorker(assemblyPath, package.EntryType), package.ReleaseIdleWorkers);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(30));
             var operations = await worker.DescribeAsync(timeout.Token);
             if (operations is null || operations.Length is < 1 or > 128 || operations.Select(o => o.Name).Distinct(StringComparer.Ordinal).Count() != operations.Length)
@@ -144,7 +145,7 @@ public sealed class ExtensionHost : IDisposable
                 ExtensionSchema.CheckDefinition(operation.InputSchema);
                 if (!operation.InputSchema.TryGetProperty("type", out var kind) || kind.GetString() != "object") throw Error("invalid_extension", "Operation input must be an object schema.");
             }
-            var summary = new ExtensionSummary(id, version, Guid.NewGuid().ToString("N"), hash, operations, 0, "active", package.ParallelWorkers);
+            var summary = new ExtensionSummary(id, version, Guid.NewGuid().ToString("N"), hash, operations, 0, "active", package.ParallelWorkers, package.ReleaseIdleWorkers);
             // Persist activation only after validation/health. Failure leaves the old generation selected.
             AtomicText(ledger, hash); Save(SafePath(root, id, "active.json"), new ExtensionPointer(version));
             lock (sync)

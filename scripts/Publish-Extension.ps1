@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$EntryAssembly,
     [Parameter(Mandatory)][string]$EntryType,
     [ValidateRange(1,4)][int]$ParallelWorkers = 1,
+    [switch]$ReleaseIdleWorkers,
     [string]$PackageRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'extensions')
 )
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,7 @@ foreach ($relative in $files.Keys) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $source $relative) -Destination $target
 }
-$json = @{ id = $Id; version = $Version; contractVersion = 1; entryAssembly = $EntryAssembly; entryType = $EntryType; files = $files; parallelWorkers = $ParallelWorkers } | ConvertTo-Json -Depth 10
+$json = @{ id = $Id; version = $Version; contractVersion = 1; entryAssembly = $EntryAssembly; entryType = $EntryType; files = $files; parallelWorkers = $ParallelWorkers; releaseIdleWorkers = [bool]$ReleaseIdleWorkers } | ConvertTo-Json -Depth 10
 [IO.File]::WriteAllText((Join-Path $destination 'manifest.json'), $json, [Text.UTF8Encoding]::new($false))
 $pointer = Join-Path $PackageRoot "$Id/active.json"
 if (!(Test-Path -LiteralPath $pointer)) { [IO.File]::WriteAllText($pointer, (@{ version = $Version } | ConvertTo-Json), [Text.UTF8Encoding]::new($false)) }
