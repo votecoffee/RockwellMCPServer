@@ -16,6 +16,7 @@ public sealed class ResourceLedgerTests : IDisposable
         internal readonly Dictionary<uint, ProcessIdentity> Live = new();
         internal int Effects;
         internal bool FailAfterEffect;
+        internal Action? DuringTermination;
         internal Driver() => Live.Add(42, Actor);
         internal static ProcessIdentity Identity(uint pid, string created = "200") => new ProcessIdentity(new string('a', 64), pid, created, @"C:\fixture\worker.exe").Normalize();
         public ProcessIdentity CurrentIdentity() => Actor;
@@ -29,7 +30,7 @@ public sealed class ResourceLedgerTests : IDisposable
         {
             public ProcessIdentity Identity => identity;
             public bool Alive => driver.State(identity) == "alive";
-            public void Terminate() { driver.Effects++; driver.Live.Remove(identity.Pid); if (driver.FailAfterEffect) throw new IOException("Synthetic lost result"); }
+            public void Terminate() { driver.Effects++; driver.Live.Remove(identity.Pid); driver.DuringTermination?.Invoke(); if (driver.FailAfterEffect) throw new IOException("Synthetic lost result"); }
             public bool Wait(int milliseconds) => !Alive;
             public void Dispose() { }
         }
@@ -86,6 +87,42 @@ public sealed class ResourceLedgerTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => owner.Cleanup(record.ResourceId, ledger.Get(record.ResourceId).Revision, new('e', 32)));
         Assert.Equal(1, driver.Effects);
     }
+    [Fact]
+    public async Task SlowCleanupReleasesTheGlobalLockAndDuplicateRequestCannotDispatchAgain()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (_, owner, record) = Bound(); var request = new string('d', 32);
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+        driver.DuringTermination = () => { entered.Set(); if (!release.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException(); };
+        var cleanup = Task.Run(() => owner.Cleanup(record.ResourceId, record.Revision, request));
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(3)));
+            var other = Ledger().Owner("unrelated-fixture");
+            var admitted = await Task.Run(() => other.BeginLaunch("Unrelated admission")).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal("launching", admitted.State);
+            var duplicate = owner.Cleanup(record.ResourceId, record.Revision, request);
+            Assert.Equal("dispatching", duplicate.Outcome); Assert.Equal(1, driver.Effects);
+        }
+        finally { release.Set(); }
+        Assert.Equal("terminated", (await cleanup).Outcome); Assert.Equal(1, driver.Effects);
+    }
+
+    [Fact]
+    public void ChangedPendingRecordCannotBeOverwrittenAfterCleanupEffect()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (ledger, owner, record) = Bound(); var request = new string('d', 32);
+        driver.DuringTermination = () => owner.SetRecoveryBarrier(record.ResourceId, "Synthetic concurrent recovery barrier");
+        var error = Assert.Throws<InvalidOperationException>(() => owner.Cleanup(record.ResourceId, record.Revision, request));
+        Assert.Contains("changed after dispatch", error.Message);
+        var retained = ledger.Get(record.ResourceId);
+        Assert.Equal("Synthetic concurrent recovery barrier", retained.RecoveryBarrier);
+        Assert.Equal("dispatching", retained.Receipt!.Outcome);
+        Assert.Equal(retained.Receipt, owner.Cleanup(record.ResourceId, record.Revision, request));
+        Assert.Equal(1, driver.Effects);
+    }
+
     [Theory]
     [InlineData("attached", "report")] [InlineData("shared", "report")] [InlineData("private", "report")]
     public void Nonterminable_claims_never_reach_process_control(string ownership, string cleanup)

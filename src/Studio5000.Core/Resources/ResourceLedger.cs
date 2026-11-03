@@ -347,44 +347,64 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             return ledger.Replace(record with { State = "released", Reconciliation = new ResourceReconciliation(OwnerId, Identity, revision,
                 "Reviewed legacy stateless launch proof " + proofHash + ": original full owner is gone; unpublished children were suspended in its non-inherited kill-on-close job. No child PID invented; native/customer journals remain retained.", Now).Normalize() });
         });
-        public CleanupReceipt Cleanup(string id, string revision, string requestId, IResourceProcessGroup? group = null) => ledger.Locked(() =>
+        public CleanupReceipt Cleanup(string id, string revision, string requestId, IResourceProcessGroup? group = null)
         {
-            ResourceRules.Token(requestId, 32); var record = ledger.Get(id); Current(record);
-            if (record.Receipt is not null)
-            {
-                if (record.Receipt.RequestId == requestId && record.Receipt.ExpectedRevision == revision) return record.Receipt;
-                throw new InvalidOperationException("Cleanup already claimed; inspect its retained receipt instead of replaying.");
-            }
-            if (record.Revision != revision || ledger.Records().Any(r => r.Receipt?.RequestId == requestId)) throw new InvalidOperationException("Cleanup revision/request identity conflict.");
-            if (record.Ownership != "private" || record.CleanupMode != "terminate" || record.State != "active" || record.RecoveryBarrier is not null || record.Process is null || ledger.Conflict(record))
-                throw new InvalidOperationException("Resource policy, recovery barrier or another retained claim blocks cleanup.");
-            if (group is not null)
-            {
-                if (record.Containment != "windows_job" || group.Identity.Normalize() != record.Process) throw new InvalidOperationException("Process group is not this exact owned resource.");
-                var candidate = (record with { Members = group.Identities() }).Normalize();
-                if (ledger.Conflict(candidate)) throw new InvalidOperationException("Another retained claim references a process-tree member.");
-                if (!candidate.Members.SequenceEqual(record.Members)) record = ledger.Replace(candidate);
-            }
-            var identity = record.Process ?? throw new InvalidOperationException("Resource process identity was lost.");
-            var state = ledger.Driver.State(identity);
-            if (state is not ("alive" or "absent" or "different")) throw new InvalidOperationException("Process identity is unavailable.");
-            using var handle = state == "alive" ? ledger.Driver.Open(identity) : null;
-            var receipt = new CleanupReceipt(requestId, revision, "dispatching", "Cleanup intent recorded; outcome not yet verified");
-            var pending = ledger.Replace(record with { State = "uncertain", Receipt = receipt });
+            IResourceProcessHandle? handle = null;
+            ResourceRecord? pending = null;
             try
             {
-                if (group is not null) group.Stop();
-                else if (handle is not null) { handle.Terminate(); if (!handle.Wait(5000)) throw new TimeoutException("Resource did not exit before cleanup deadline."); }
-                receipt = receipt with { Outcome = group is not null || handle is not null ? "terminated" : "already_exited", Message = group is not null ? "Owned process tree stopped" : "Exact recorded process is gone" };
-                ledger.Replace(pending with { State = "terminated", Receipt = receipt });
+                var previous = ledger.Locked<CleanupReceipt?>(() =>
+                {
+                    ResourceRules.Token(requestId, 32); var record = ledger.Get(id); Current(record);
+                    if (record.Receipt is not null)
+                    {
+                        if (record.Receipt.RequestId == requestId && record.Receipt.ExpectedRevision == revision) return record.Receipt;
+                        throw new InvalidOperationException("Cleanup already claimed; inspect its retained receipt instead of replaying.");
+                    }
+                    if (record.Revision != revision || ledger.Records().Any(r => r.Receipt?.RequestId == requestId)) throw new InvalidOperationException("Cleanup revision/request identity conflict.");
+                    if (record.Ownership != "private" || record.CleanupMode != "terminate" || record.State != "active" || record.RecoveryBarrier is not null || record.Process is null || ledger.Conflict(record))
+                        throw new InvalidOperationException("Resource policy, recovery barrier or another retained claim blocks cleanup.");
+                    if (group is not null)
+                    {
+                        if (record.Containment != "windows_job" || group.Identity.Normalize() != record.Process) throw new InvalidOperationException("Process group is not this exact owned resource.");
+                        var candidate = (record with { Members = group.Identities() }).Normalize();
+                        if (ledger.Conflict(candidate)) throw new InvalidOperationException("Another retained claim references a process-tree member.");
+                        if (!candidate.Members.SequenceEqual(record.Members)) record = ledger.Replace(candidate);
+                    }
+                    var identity = record.Process ?? throw new InvalidOperationException("Resource process identity was lost.");
+                    var state = ledger.Driver.State(identity);
+                    if (state is not ("alive" or "absent" or "different")) throw new InvalidOperationException("Process identity is unavailable.");
+                    handle = state == "alive" ? ledger.Driver.Open(identity) : null;
+                    var receipt = new CleanupReceipt(requestId, revision, "dispatching", "Cleanup intent recorded; outcome not yet verified");
+                    pending = ledger.Replace(record with { State = "uncertain", Receipt = receipt });
+                    return null;
+                });
+                if (previous is not null) return previous;
+                var dispatched = pending!;
+                var result = dispatched.Receipt!;
+                // Native waits/process-group shutdown must not hold the shared
+                // ledger lock or prevent unrelated applications from admission.
+                try
+                {
+                    if (group is not null) group.Stop();
+                    else if (handle is not null) { handle.Terminate(); if (!handle.Wait(5000)) throw new TimeoutException("Resource did not exit before cleanup deadline."); }
+                    result = result with { Outcome = group is not null || handle is not null ? "terminated" : "already_exited", Message = group is not null ? "Owned process tree stopped" : "Exact recorded process is gone" };
+                }
+                catch (Exception)
+                {
+                    result = result with { Outcome = "uncertain", Message = "Inspect actual app/resource state; cleanup must not be replayed" };
+                }
+                return ledger.Locked(() =>
+                {
+                    var current = ledger.Get(id); Current(current);
+                    if (current.Revision != dispatched.Revision || current.Receipt != dispatched.Receipt)
+                        throw new InvalidOperationException("Cleanup record changed after dispatch; inspect the retained request. No outcome was overwritten and cleanup must not be replayed.");
+                    ledger.Replace(current with { State = result.Outcome == "uncertain" ? "uncertain" : "terminated", Receipt = result });
+                    return result;
+                });
             }
-            catch (Exception)
-            {
-                receipt = receipt with { Outcome = "uncertain", Message = "Inspect actual app/resource state; cleanup must not be replayed" };
-                ledger.Replace(pending with { Receipt = receipt });
-            }
-            return receipt;
-        });
+            finally { handle?.Dispose(); }
+        }
         public ResourceRecord[] FenceAndInspectClose() => ledger.Locked(() =>
         {
             if (ledger.Driver.CurrentIdentity().Normalize() != Identity) throw new InvalidOperationException("Only the exact current owner may fence resource admission.");

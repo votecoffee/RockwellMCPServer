@@ -13,15 +13,22 @@ var extension = Activator.CreateInstance(assembly.GetType(args[1], throwOnError:
 var context = new ExtensionContext(Path.GetDirectoryName(assemblyPath)!, Path.GetFullPath(args[2]));
 while (await Console.In.ReadLineAsync() is { } line)
 {
+    await HandleMessageAsync(extension, context, output, line);
+    line = null!; // An idle read must not retain the preceding request string.
+}
+if (extension is IDisposable disposable) disposable.Dispose();
+
+static async Task HandleMessageAsync(IWorkspaceExtension messageExtension, ExtensionContext messageContext, TextWriter protocolOutput, string requestLine)
+{
     WorkerReply reply;
     try
     {
-        if (line.Length > 2 * 1024 * 1024) throw new ArgumentException("Request exceeds 2 MiB.");
-        var request = JsonSerializer.Deserialize<WorkerRequest>(line, ExtensionProtocol.Json)!;
+        if (requestLine.Length > 2 * 1024 * 1024) throw new ArgumentException("Request exceeds 2 MiB.");
+        var request = JsonSerializer.Deserialize<WorkerRequest>(requestLine, ExtensionProtocol.Json)!;
         var value = request.Method switch
         {
-            "describe" => JsonSerializer.SerializeToElement(extension.Describe(), ExtensionProtocol.Json),
-            "invoke" => await extension.InvokeAsync(request.Operation!, request.Arguments!.Value, context, CancellationToken.None),
+            "describe" => JsonSerializer.SerializeToElement(messageExtension.Describe(), ExtensionProtocol.Json),
+            "invoke" => await messageExtension.InvokeAsync(request.Operation!, request.Arguments!.Value, messageContext, CancellationToken.None),
             _ => throw new ArgumentException("Unknown worker request.")
         };
         reply = new(true, value);
@@ -29,9 +36,8 @@ while (await Console.In.ReadLineAsync() is { } line)
     catch (Exception ex) { reply = new(false, Error: ex.GetBaseException().Message); }
     var json = JsonSerializer.Serialize(reply, ExtensionProtocol.Json);
     if (json.Length > ExtensionProtocol.MaxReplyCharacters) json = JsonSerializer.Serialize(new WorkerReply(false, Error: "Result exceeds the 12 MiB character limit; page or narrow the query."), ExtensionProtocol.Json);
-    await output.WriteLineAsync(json); await output.FlushAsync();
+    await protocolOutput.WriteLineAsync(json); await protocolOutput.FlushAsync();
 }
-if (extension is IDisposable disposable) disposable.Dispose();
 
 sealed class ExtensionLoadContext(string path) : AssemblyLoadContext
 {

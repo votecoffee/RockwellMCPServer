@@ -1,6 +1,6 @@
 # Native resource ledger contract
 
-The shared Core contains a .NET producer/reader for the reviewed framework 0.20 [resource record schema and ownership contract](https://github.com/votecoffee/CodexMCPBroker/blob/5b2cac50ca24d21a15b732e0424bb02fd794e1fb/docs/resource-ownership.md). Service, worker, native-session and stdio source integrations use it. Component/source validation remains separate from actual application, native and installed acceptance.
+The shared Core contains a .NET producer/reader for the reviewed framework [resource record schema and ownership contract](https://github.com/votecoffee/CodexMCPBroker/blob/0efbb9473d61b42c774e3cf30af558116d747844/docs/resource-ownership.md). Service, worker, native-session and stdio source integrations use it. Component/source validation remains separate from actual application, native and installed acceptance.
 
 ## Interoperability
 
@@ -71,3 +71,5 @@ The real long-lived stdio supervisor uses shared Core to [ensure the pinned ordi
 Harmless process fixtures cover repeated capacity refusal at an unchanged one-resource limit, pre-resume failure with a retained failed bound record, owner death before admission with no reservation or executed code, and owner death after admission followed by exact-generation recovery. These fixtures never justify releasing historical unbound or native/uncertain records.
 
 The optional Python remote frontend uses the same Windows share-none admission files as the .NET adapter and pins its parent/wrapper identities. Its public SDK stdio lifecycle is cancelled on parent loss; SDK EOF cancels the monitor and releases admission/observation handles. It owns no engineering children and never stops the app host. Pure SDK-lifecycle stubs, native file handles and harmless Python echo/timeout processes have been checked. Actual MCP SDK/host and installed plugin acceptance remain held.
+
+Cleanup durably records its request under the shared lock, releases the lock for process/group shutdown and waits, then verifies the exact pending revision before recording completion. A changed record retains its uncertainty; no receipt or engineering barrier is overwritten. Duplicate request IDs return the retained receipt without repeating process control. Private reconciliation independently checks the recorded process and every member.
