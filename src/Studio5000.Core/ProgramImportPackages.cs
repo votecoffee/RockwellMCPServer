@@ -21,7 +21,8 @@ public sealed record ProgramImportManifest(int SchemaVersion, string Kind, Merge
     bool PackagingOnly = true, bool NativeImportAccepted = false, string ImportOperation = "overwrite_program",
     string ReplacementScope = "all_routines_and_local_tags", string SchedulePolicy = "preserve_existing_task_and_order",
     bool RungInsertion = false, string DependencyMode = LogixTypeDependencies.SelectedNewOnly,
-    TypeDependencyClosure? TypeClosure = null, bool NativePreconfigurationAccepted = false);
+    TypeDependencyClosure? TypeClosure = null, bool NativePreconfigurationAccepted = false,
+    LogixMemberMetadataReport? MemberMetadata = null);
 public sealed record ProgramImportContent(byte[] ProgramXml, byte[] ManifestJson, byte[] Zip, ProgramImportManifest Manifest);
 public sealed record ProgramImportPackage(Artifact Program, Artifact Manifest, Artifact Package, ProgramImportManifest Plan);
 public sealed record ProgramImportReadbackRequest(string ManifestArtifactId, string ExpectedManifestSha256,
@@ -164,6 +165,11 @@ public static class ProgramImportPackaging
             "<Programs>" + packagedProgram + "</Programs></Controller></RSLogix5000Content>\n";
         var xml = Encoding.UTF8.GetBytes(text); if (xml.Length > MaximumOutputBytes) throw Error("limit", "The import exceeds 32 MiB.");
         var output = new LogixLexicalDocument(xml); var outputProgram = output.Document.Descendants("Program").Single();
+        // Classify against the complete pinned source, even when legacy mode omits
+        // an existing nested type from the payload. Keep source finding locations.
+        var metadata = LogixMemberMetadata.Inspect(source.Document, includedTypes.Select(Name).ToArray());
+        if (metadata.Findings.FirstOrDefault(f => f.Status == "fail") is { } invalidMetadata)
+            throw Error("member_metadata", invalidMetadata.Location + ": " + invalidMetadata.Detail);
         foreach (var e in routines.Concat(tags).Concat(globals).Concat(includedTypes))
         {
             var candidates = e.Name == "Routine" ? outputProgram.Elements("Routines").Elements("Routine") : e.Name == "DataType" ? output.Document.Root!.Element("Controller")!.Elements("DataTypes").Elements("DataType") :
@@ -196,7 +202,7 @@ public static class ProgramImportPackaging
             ProjectService.Hash(xml), Hash(programRaw), changed.Length, routines.Length, tags.Length, definitions, globals.Select(Name).ToArray(), types.Select(Name).ToArray(),
             Canonical(task), new(true, "Existing online data-table values are preserved by the native import contract, not observed by this package.", "New tags receive imported initial values; subsequent running logic can change them."),
             schemaReport, steps, closure?.Boundary ?? "Legacy selected_new_only excludes legacy source type context. Destination-only resolution cannot establish native preconfiguration compatibility; no complete source closure or native acceptance is claimed.", Boundary,
-            DependencyMode: request.DependencyMode, TypeClosure: closure);
+            DependencyMode: request.DependencyMode, TypeClosure: closure, MemberMetadata: metadata);
         var json = JsonSerializer.SerializeToUtf8Bytes(manifest, ProjectService.Json);
         using var zip = new MemoryStream();
         using (var archive = new ZipArchive(zip, ZipArchiveMode.Create, true))

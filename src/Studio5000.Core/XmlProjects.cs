@@ -69,9 +69,11 @@ public static class XmlProjects
             throw new OperationException("invalid_edits", "Provide between 1 and 200 edits.");
         if (preserveScalarBytes && XmlScalarEdits.Supports(edits)) return XmlScalarEdits.Apply(baseline, edits, b => Parse(b, true), ApplyEdit, Validate, true, beforeEdit);
         var doc = Parse(baseline);
+        var original = new XDocument(doc);
         foreach (var edit in edits)
         { beforeEdit?.Invoke(doc, edit); ApplyEdit(doc, edit); }
         Validate(doc);
+        LogixMemberMetadata.GuardAuthored(original, doc);
         using var stream = new MemoryStream();
         using (var writer = XmlWriter.Create(stream, new XmlWriterSettings
         {

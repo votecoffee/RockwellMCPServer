@@ -12,6 +12,8 @@ Destination type presence alone cannot establish that a temporary native import 
 
 Routine/local-tag/new-controller-tag XML bytes are preserved. Program `Use` metadata and datatype `Use=Reference` context metadata are explicit packaging changes; datatype identity/body remains unchanged. The ZIP retains exact original type XML under `source-type-definitions/`, with source hashes for evidence reuse.
 
+Both packagers check included complex UDT member metadata separately from XSD. STRING, declared custom string/nested UDT members and supported built-in structures require `Radix="NullType"`, including arrays. Explicit numeric or missing radix is refused without changing source bytes; manifests retain a separate member-metadata report. Atomic members keep their display styles. A source-bound diagnostic is also available through `studio_validation_preview` / `offline-integrity` as `complex-udt-member-radix`; unknown types remain unsupported. These checks use generated convention fixtures, establish no native acceptance and do not identify the cause of a reported import failure.
+
 Example request after registering generated or authorized snapshots:
 
 ```json

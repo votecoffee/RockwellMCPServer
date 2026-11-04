@@ -8,7 +8,7 @@ namespace Studio5000.Tests;
 
 public sealed class TypeDependencyTests
 {
-    private static string Definition(string name, string memberType) => $"<DataType Name='{name}'><Description><![CDATA[Δ {name}]]></Description><Members><Member Name='Value' DataType='{memberType}'/></Members></DataType>\r\n";
+    private static string Definition(string name, string memberType) => $"<DataType Name='{name}'><Description><![CDATA[Δ {name}]]></Description><Members><Member Name='Value' DataType='{memberType}' Radix='{(memberType is "DINT" or "REAL" ? "Decimal" : "NullType")}'/></Members></DataType>\r\n";
     private static byte[] Snapshot(bool modified) => Encoding.UTF8.GetBytes($"""
         <RSLogix5000Content SchemaRevision='1.0' SoftwareRevision='35.00' TargetType='Controller' ContainsContext='false'><Controller Name='Fixture'>
         <DataTypes>{Definition("Leaf", "DINT")}{Definition("Legacy", "Leaf")}{(modified ? Definition("NewType", "Legacy") + Definition("Unused", "REAL") : "")}</DataTypes>
@@ -69,6 +69,18 @@ public sealed class TypeDependencyTests
         var doc = XmlProjects.Parse(Snapshot(true)); doc.Descendants("DataType").Single(t => (string?)t.Attribute("Name") == "Leaf").Remove();
         var a = Bytes(doc); var b = Snapshot(false);
         Assert.Equal("type_dependency_source_missing", Assert.Throws<OperationException>(() => LogixTypeDependencies.Build(a, b, Request(a, b))).Code);
+    }
+    [Theory]
+    [InlineData(LogixTypeDependencies.SourceClosure, "type_dependency_member_metadata")]
+    [InlineData(LogixTypeDependencies.SelectedNewOnly, "program_import_member_metadata")]
+    public void Nested_member_metadata_is_checked_against_source_even_when_legacy_mode_omits_its_existing_type(string mode, string code)
+    {
+        var doc = XmlProjects.Parse(Snapshot(true));
+        doc.Descendants("DataType").Single(t => (string?)t.Attribute("Name") == "NewType").Descendants("Member").Single().SetAttributeValue("Radix", "Decimal");
+        var a = Bytes(doc); var b = Snapshot(false);
+        var request = new ProgramImportPackageRequest(new("source", ProjectService.Hash(a)), new("baseline", ProjectService.Hash(b)), "App", "MainTask", NewDataTypes: ["NewType"], DependencyMode: mode);
+        Assert.Equal(code, Assert.Throws<OperationException>(() => ProgramImportPackaging.Build(a, b, request)).Code);
+        Assert.Equal(a, Bytes(doc));
     }
     [Theory]
     [InlineData("type_cycle", "type_dependency_cycle")]

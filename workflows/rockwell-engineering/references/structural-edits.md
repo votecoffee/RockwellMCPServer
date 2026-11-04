@@ -76,6 +76,8 @@ REST calls use the same Core operations as the GUI/MCP adapter. Switching front 
 
 ## Deliver the named L5X, then honor native ownership
 
+Newly authored complex UDT members, or explicitly changed datatype/radix pairs, must use `Radix="NullType"`. This includes STRING, declared custom strings, nested UDTs and their arrays; numeric atomic members retain their own display styles. Structural preview blocks invalid or unknown authored member metadata before apply. Ordinary XML component authoring uses the same guard. An unrelated comment edit preserves inherited metadata; run the named `complex-udt-member-radix` validation check to report it explicitly. The guard never silently rewrites source definitions and is not a native compiler/import check.
+
 For changed readable RLL, require `rll-branch-grammar` coverage in the named Logix validation report before routine-import preparation or handoff. Discover `studio_validation_profiles`, then use `studio_validation_preview` with `profile:"offline-integrity"` and the pinned `candidate:{projectId,sha256}`. The documented REST equivalent is `POST /api/logix-validation/preview`. If that named check is absent, report the installed host's coverage gap rather than calling XML/XSD validation a ladder syntax pass.
 
 Each bracket branch must contain a comma at its own depth and at least two nonempty legs. Commas/array brackets inside instruction parentheses do not separate branch legs. For example, `[[XIC(A)XIC(B)],XIC(C)]OTE(D);` is rejected; `[XIC(A)XIC(B),XIC(C)]OTE(D);` passes this bounded branch check. Existing malformed grammar remains a failure even when inherited from the baseline. The check preserves source bytes and is separate from native compiler/import acceptance.

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated convention fixture. Not a captured native export or native acceptance receipt. -->
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.00" TargetType="Controller" ContainsContext="false">
+  <Controller Name="MetadataFixture">
+    <DataTypes>
+      <DataType Name="String24" Family="StringFamily" Class="User">
+        <Members>
+          <Member Name="LEN" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false"/>
+          <Member Name="DATA" DataType="SINT" Dimension="24" Radix="ASCII" Hidden="false"/>
+        </Members>
+      </DataType>
+      <DataType Name="Inner" Family="NoFamily" Class="User">
+        <Members><Member Name="Count" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false"/></Members>
+      </DataType>
+      <DataType Name="Outer" Family="NoFamily" Class="User">
+        <Description><![CDATA[Generated Δ metadata fixture]]></Description>
+        <Members>
+          <Member Name="Label" DataType="STRING" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="CustomLabel" DataType="String24" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="Nested" DataType="Inner" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="History" DataType="Inner" Dimension="4" Radix="NullType" Hidden="false"/>
+          <Member Name="Delay" DataType="TIMER" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="Total" DataType="COUNTER" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="Sequence" DataType="CONTROL" Dimension="0" Radix="NullType" Hidden="false"/>
+          <Member Name="_Bits" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="true"/>
+          <Member Name="Enabled" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="_Bits" BitNumber="0"/>
+        </Members>
+      </DataType>
+    </DataTypes>
+    <Tags/>
+    <Programs/>
+    <Tasks/>
+  </Controller>
+</RSLogix5000Content>

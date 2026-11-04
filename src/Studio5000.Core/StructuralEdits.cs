@@ -249,6 +249,8 @@ internal static partial class StructuralEditing
             foreach (var aoi in reference.Aois.Where(t => !afterAoiNames.Contains(t))) findings.Add(new("blocked", "reference-aoi-dependency", reference.Binding.Name, "Required reference AOI is absent after the batch: " + aoi));
         }
         Dependencies(doc, actual, wholeTags, findings);
+        foreach (var metadata in LogixMemberMetadata.AuthoredFindings(doc, actual))
+            findings.Add(new("blocked", LogixMemberMetadata.CheckName, metadata.Location, metadata.Detail));
         if (safety && request.Scope.SafetyHandling != "review-only") findings.Add(new("blocked", "safety", "scope", "Safety-class edits require explicit review-only handling; signatures remain retained and unvalidated."));
         if (!request.Scope.AcknowledgeIncompleteBindings) findings.Add(new("blocked", "binding-coverage", "scope", "Explicitly acknowledge incomplete compiler/AOI/FBD/SFC/external/HMI binding coverage before creating a review copy."));
         findings.Add(new("review", "native-readback", "project", "Native compile/import/readback and safety acceptance have not been performed. Source plan bytes are hash-checked without interpreting the plan's authority."));

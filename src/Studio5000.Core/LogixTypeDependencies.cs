@@ -13,7 +13,8 @@ public sealed record TypeDependencyDefinition(string Name, string SourceRawSha25
 public sealed record TypeDependencyReference(string Scope, string Name, string SourceRawSha256, string? DataType, string? AliasFor);
 public sealed record TypeDependencyClosure(MergeSnapshot Source, MergeSnapshot Baseline, string[] Roots,
     TypeDependencyDefinition[] Definitions, TypeDependencyReference[] TagReferences, string[] BuiltInTypes,
-    bool CompleteForDeclaredSourceGraph, bool NativePreconfigurationAccepted, string Boundary);
+    bool CompleteForDeclaredSourceGraph, bool NativePreconfigurationAccepted, string Boundary,
+    LogixMemberMetadataReport? MemberMetadata = null);
 public sealed record TypeDependencyContent(byte[]? TypesXml, byte[] ManifestJson, byte[] Zip, TypeDependencyClosure Closure);
 public sealed record TypeDependencyPackage(Artifact? Types, Artifact Manifest, Artifact Package, TypeDependencyClosure Closure);
 
@@ -129,7 +130,10 @@ public static class LogixTypeDependencies
         foreach (var name in Select(request.ControllerTags)) Tag(globals.GetValueOrDefault(name) ?? throw Error("source_missing", "Selected controller tag is absent: " + name), "controller");
         foreach (var name in Select(request.DataTypes)) { roots.Add(name); VisitType(name); }
         if (roots.Count == 0 && request.ProgramName is null) throw Error("selection", "Select a program, explicit controller tags or datatype roots.");
-        return new(request.Source, request.Baseline, roots.ToArray(), completed.Values.ToArray(), references.Values.ToArray(), builtIns.ToArray(), true, false, Boundary);
+        var metadata = LogixMemberMetadata.Inspect(source.Document, completed.Keys.ToArray());
+        if (metadata.Findings.FirstOrDefault(f => f.Status == "fail") is { } invalid)
+            throw Error("member_metadata", invalid.Location + ": " + invalid.Detail);
+        return new(request.Source, request.Baseline, roots.ToArray(), completed.Values.ToArray(), references.Values.ToArray(), builtIns.ToArray(), true, false, Boundary, metadata);
     }
 
     public static TypeDependencyContent Build(byte[] sourceBytes, byte[] baselineBytes, TypeDependencyPackageRequest request)
