@@ -239,7 +239,9 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
         });
         internal const string FrontdoorAppId = "rockwell-mcp-frontdoor";
         internal const string FrontdoorLabel = "Rockwell MCP metadata frontdoor";
-        internal ResourceRecord AdmitFrontdoor(string[]? reviewedImages = null) => ledger.Locked(() =>
+        internal ResourceRecord AdmitFrontdoor(string[]? reviewedImages = null) => TryAdmitFrontdoor(reviewedImages)
+            ?? throw new InvalidOperationException("Metadata frontdoor claim budget reached; retain unresolved evidence.");
+        internal ResourceRecord? TryAdmitFrontdoor(string[]? reviewedImages = null) => ledger.Locked<ResourceRecord?>(() =>
         {
             if (closing || AppId != FrontdoorAppId || ledger.Driver.CurrentIdentity().Normalize() != Identity)
                 throw new InvalidOperationException("Frontdoor admission requires its actual current process owner.");
@@ -253,8 +255,9 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
                     var reconciled = ReconcileExitedFrontdoorLocked(old, old.Revision, old.Owner.Executable, records);
                     if (reconciled is not null) records[i] = reconciled;
                 }
-            if (records.Length >= 4096 || records.Count(r => r.AppId == AppId && !r.Terminal) >= ledger.MaximumActive)
+            if (records.Length >= 4096)
                 throw new InvalidOperationException("Metadata frontdoor claim budget reached; retain unresolved evidence.");
+            if (records.Count(r => r.AppId == AppId && !r.Terminal) >= ledger.MaximumActive) return null;
             var record = new ResourceRecord { ResourceId = Guid.NewGuid().ToString("N"), AppId = AppId, OwnerId = OwnerId, Owner = Identity,
                 Label = FrontdoorLabel, Kind = "mcp-frontdoor", Ownership = "attached", CleanupMode = "report", State = "active",
                 CreatedAt = Now, UpdatedAt = Now }.Normalize();

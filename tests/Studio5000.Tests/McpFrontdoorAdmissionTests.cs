@@ -30,6 +30,48 @@ public sealed class McpFrontdoorAdmissionTests : IDisposable
     public void Dispose() => Directory.Delete(root, true);
 
     [Fact]
+    public void Normal_session_admission_does_not_review_unused_predecessor_closures()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var reviews = 0;
+        using var session = McpFrontdoorSession.Open(root, Path.Combine(root, "registry"), new(), default, metadata,
+            _ => reviews++);
+        Assert.Equal("active", session.Record.State);
+        Assert.Equal(0, reviews);
+    }
+
+    [Theory]
+    [InlineData("departed")] [InlineData("unknown")] [InlineData("review-failed")]
+    public void Full_metadata_budget_reviews_predecessors_before_recovery_and_keeps_uncertainty(string condition)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = new ResourceLedger(Path.Combine(root, "recovery-registry"), driver, 1);
+        var old = ledger.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId).AdmitFrontdoor();
+        var oldPath = Path.Combine(ledger.DirectoryPath, old.ResourceId + ".json"); var bytes = File.ReadAllBytes(oldPath);
+        driver.Current = Identity(200, "new.exe"); driver.States[old.Owner] = condition == "unknown" ? "unknown" : "absent";
+        var reviews = 0; var reads = 0; ledger.BeforeRecordsRead = () => reads++;
+        var policy = new McpFrontdoorPolicy(MaximumMetadataClients: 1, MaximumStartingClients: 1);
+        void Review(HashSet<string> images)
+        {
+            reviews++;
+            if (condition == "review-failed") throw new IOException("Synthetic unavailable predecessor proof");
+            images.Add(old.Owner.Executable);
+        }
+        if (condition == "departed")
+        {
+            using var session = McpFrontdoorSession.Open(root, Path.Combine(root, "recovery-registry"), policy, default, ledger, Review);
+            Assert.Equal("released", ledger.Get(old.ResourceId).State); Assert.Equal("active", session.Record.State);
+        }
+        else
+        {
+            Assert.Throws<InvalidOperationException>(() => McpFrontdoorSession.Open(root, Path.Combine(root, "recovery-registry"), policy, default, ledger, Review));
+            Assert.Equal(bytes, File.ReadAllBytes(oldPath));
+            using var available = McpClientLease.AcquireFrontdoor(root, policy); Assert.Equal(0, available.Slot);
+        }
+        Assert.Equal(1, reviews); Assert.Equal(2, reads);
+    }
+
+    [Fact]
     public void Session_open_scans_history_once_without_changing_unrelated_claims()
     {
         if (!OperatingSystem.IsWindows()) return;

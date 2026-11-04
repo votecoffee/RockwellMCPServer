@@ -14,7 +14,8 @@ public sealed class McpFrontdoorSession : IDisposable
 
     public static McpFrontdoorSession Open(string root, string registry, McpFrontdoorPolicy policy, CancellationToken ct = default)
         => Open(root, registry, policy, ct, null);
-    internal static McpFrontdoorSession Open(string root, string registry, McpFrontdoorPolicy policy, CancellationToken ct, ResourceLedger? suppliedLedger)
+    internal static McpFrontdoorSession Open(string root, string registry, McpFrontdoorPolicy policy, CancellationToken ct, ResourceLedger? suppliedLedger,
+        Action<HashSet<string>>? reviewPredecessors = null)
     {
         var lease = McpClientLease.AcquireFrontdoor(root, policy, ct);
         try
@@ -22,16 +23,22 @@ public sealed class McpFrontdoorSession : IDisposable
             var ledger = suppliedLedger ?? new ResourceLedger(registry, new WindowsResourceProcessDriver(), policy.MaximumMetadataClients);
             var owner = ledger.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId);
             var images = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { owner.Identity.Executable };
-            // Validate predecessor provenance outside the ledger lock. Admission
-            // reviews/reconciles and counts one fresh corpus under that lock.
+            var admitted = owner.TryAdmitFrontdoor(images.ToArray());
+            if (admitted is not null) return new(ledger, owner, admitted, lease);
+            // Only a full metadata budget needs cross-version recovery. Validate
+            // predecessor provenance outside the lock, then inspect a fresh corpus.
             try
             {
-                var pin = OfflineServicePin.Load(root, Path.GetDirectoryName(owner.Identity.Executable)!);
-                foreach (var previous in pin.PreviousFrontends.Where(p => p.Files.Any(f => f.Path == McpFrontdoorPolicy.FileName)))
+                if (reviewPredecessors is not null) reviewPredecessors(images);
+                else
                 {
-                    _ = McpFrontdoorPolicy.Read(previous.Directory) ?? throw new InvalidOperationException("Prior policy disappeared.");
-                    images.Add(Path.Combine(previous.Directory, "Studio5000.StdioHost.exe"));
-                    images.Add(Path.Combine(previous.Directory, "Studio5000.Mcp.exe"));
+                    var pin = OfflineServicePin.Load(root, Path.GetDirectoryName(owner.Identity.Executable)!);
+                    foreach (var previous in pin.PreviousFrontends.Where(p => p.Files.Any(f => f.Path == McpFrontdoorPolicy.FileName)))
+                    {
+                        _ = McpFrontdoorPolicy.Read(previous.Directory) ?? throw new InvalidOperationException("Prior policy disappeared.");
+                        images.Add(Path.Combine(previous.Directory, "Studio5000.StdioHost.exe"));
+                        images.Add(Path.Combine(previous.Directory, "Studio5000.Mcp.exe"));
+                    }
                 }
             }
             catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException)
