@@ -23,6 +23,8 @@ Initialize and tool listing establish transport availability. Engineering capabi
 
 Each new frontdoor has a bounded call window. Catalog/guidance reads do not take the temporary forwarding slots used by other tools. Those slots bound forwarding from the new profile; they do not claim to impose a new universal job cap on legacy clients or the GUI. Service-side worker/job admission, project revisions, target policies and mutation queues still apply.
 
+The local request permit is released even if disposing its forwarding lease fails, including after a cancelled, timed-out or failed handler. The cleanup error still propagates; this release does not mark the operation successful, clear a durable ownership claim or retry it. A later explicit request can use the local permit, subject to the unchanged shared admission limits.
+
 The profile bounds incoming newline-delimited JSON frame bytes and buffered HTTP response bytes. It refuses new admission under available-commit pressure and refuses further forwarding when its own private commit exceeds the reviewed allowance. Size or capacity refusal never automatically retries an engineering request or terminates a peer. Large engineering artifacts should use the app's artifact/file workflow rather than an oversized inline result.
 
 Commit reservations are admission models, not OS memory limits or permission to reclaim a user's software. Review measured normal and reconnect demand, launcher/SDK/service process counts, private commit and available system commit. Include legacy overlap and temporary startup processes. Verify the actual candidate's footprint in isolated fixtures before selecting a larger policy.
