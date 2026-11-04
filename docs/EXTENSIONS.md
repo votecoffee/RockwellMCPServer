@@ -168,6 +168,8 @@ The package layout is `extensions/<id>/versions/<version>/manifest.json` plus al
 
 State is under `.local/state/extensions/`: private package snapshots, immutable-version hash receipts, `job-*.json` and `audit.jsonl`. These use the same protected state directory as the shared service.
 
+Job lists return the newest 100 receipts by creation time, preserving encounter order for equal timestamps. Selection retains at most 100 candidates while scanning instead of retaining every historical result graph. Every receipt is still read, so malformed history still fails the request. Returned schemas and all on-disk receipts remain unchanged; no automatic history deletion runs. SDK job lists use the same bounded selection.
+
 `scripts/Verify-Isolated.ps1` builds two different fixture DLLs, starts an isolated service with controller execution disabled, and uses one MCP client connection to reload v1→v2, discover/run a newly compiled operation, retain an in-flight job on v1, reject a bad reload and roll back. It also checks the bundled HMI summary and wrong-effect rejection. This demonstrates worker/MCP reload behavior; native HMI validation and controller runtime behavior remain separate. The desktop render is a generated display fixture, not native Studio automation.
 
 `scripts/Verify-InstallerPackages.ps1` exercises the packaging scripts in an isolated checkout using generated file payloads. It checks identical/changed rebuilds, selection only after all packages pass, preserved rollback bytes and explicit-version rejection. It starts no worker or service and can run while the real workspace is in use. These file-level checks complement the compiled-worker tests above.

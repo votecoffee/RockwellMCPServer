@@ -49,8 +49,8 @@ public sealed partial class ProjectService
         return new { path, sha256 = await SdkFileHashAsync(path, ct), bytes = new FileInfo(path).Length };
     }
     public SdkJob SdkJob(string id) { lock (sdkJobLock) return Read<SdkJob>(SdkJobPath(id)); }
-    public SdkJob[] SdkJobList() { lock (sdkJobLock) return Directory.GetFiles(SdkDirectory, "job.json", SearchOption.AllDirectories)
-        .Select(Read<SdkJob>).OrderByDescending(j => j.CreatedAt).Take(100).ToArray(); }
+    public SdkJob[] SdkJobList() { lock (sdkJobLock) return RecentHistory.Latest(Directory.EnumerateFiles(SdkDirectory, "job.json", SearchOption.AllDirectories)
+        .Select(Read<SdkJob>), j => j.CreatedAt, 100); }
     public SdkJob CancelSdkJob(string id)
     {
         var job = SdkJob(id);

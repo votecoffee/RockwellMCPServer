@@ -310,7 +310,7 @@ public sealed class ExtensionHost : IDisposable
         }
     }
     public ExtensionJob Job(string id) { lock (sync) return Read<ExtensionJob>(JobPath(id)); }
-    public ExtensionJob[] Jobs() { lock (sync) return Directory.GetFiles(state, "job-*.json").Select(Read<ExtensionJob>).OrderByDescending(j => j.CreatedAt).Take(100).ToArray(); }
+    public ExtensionJob[] Jobs() { lock (sync) return RecentHistory.Latest(Directory.EnumerateFiles(state, "job-*.json").Select(Read<ExtensionJob>), j => j.CreatedAt, 100); }
     public ExtensionJob CancelJob(string id) { lock (sync) { var job = Job(id); if (jobs.TryGetValue(id, out var runtime) && job.Status is "queued" or "running") runtime.Cancel.Cancel(); return job; } }
     private static ExtensionSummary Summary(Generation g) => g.Summary with { ActiveCalls = g.Leases, State = g.Retired ? "draining" : "active" };
     private string JobPath(string id) => Path.Combine(state, "job-" + (Guid.TryParseExact(id, "N", out var guid) ? guid.ToString("N") : throw Error("invalid_id", "Expected job ID.")) + ".json");

@@ -219,7 +219,7 @@ A direct extension invocation rejected by an audit write failure releases its le
 
 Background jobs also release rejected admissions, retain the rejection receipt, and publish actual completion independently of completion-audit failures. Audit warnings remain visible without replaying the operation.
 
-Completed job results and error text remain in durable receipts. The runtime keeps only scheduling metadata, allowing large completed payloads to be collected while their receipts remain readable.
+Completed job results and error text remain in durable receipts. The runtime keeps only scheduling metadata, allowing large completed payloads to be collected while their receipts remain readable. Job-list reads select at most 100 candidates while scanning history, allowing discarded result graphs to be collected before the read finishes.
 
 The local service uses workstation garbage collection to reduce idle memory overhead. Registry mutations verify current permissions and avoid rewriting an already correct access list across retained history. See [service memory configuration](docs/SERVICE_MANAGEMENT.md) and [resource ownership](docs/RESOURCE_LEDGER.md).
 
