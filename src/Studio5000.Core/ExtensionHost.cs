@@ -30,6 +30,8 @@ public sealed class ExtensionHost : IDisposable
     private readonly Dictionary<string, Generation> active = new(StringComparer.Ordinal);
     private readonly List<Generation> retired = [];
     private readonly List<string> errors = [];
+    // Accessed under initialize; failed startup selections require explicit reload.
+    private readonly HashSet<string> attempted = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (ExtensionJob Job, CancellationTokenSource Cancel)> jobs = new();
     private bool initialized, disposed, shutdownFenced;
     public bool TryFenceShutdown()
@@ -55,38 +57,49 @@ public sealed class ExtensionHost : IDisposable
             if (job.Status is "queued" or "running") Save(file, job with { Status = "indeterminate", Error = "Service ended before completion. Inspect effects before retrying." });
         }
     }
-    public async Task<ExtensionCatalog> CatalogAsync(CancellationToken ct = default)
+    public Task<ExtensionCatalog> CatalogAsync(CancellationToken ct = default) => CatalogAsync(null, ct);
+    public async Task<ExtensionCatalog> CatalogAsync(string? extensionId, CancellationToken ct)
     {
-        await InitializeAsync(ct);
-        lock (sync) return new(ExtensionProtocol.Version, active.Values.Concat(retired).Select(Summary).OrderBy(x => x.Id).ToArray(), errors.ToArray());
+        var id = extensionId is null ? null : Name(extensionId);
+        await InitializeAsync(id, ct);
+        lock (sync) return new(ExtensionProtocol.Version, active.Values.Concat(retired).Where(g => id is null || g.Summary.Id == id).Select(Summary).OrderBy(x => x.Id).ToArray(), errors.ToArray());
     }
     public int ManagementActivity()
     {
         lock (sync) return Math.Max(active.Values.Concat(retired).Sum(g => g.Leases), jobs.Values.Count(j => j.Job.Status is "queued" or "running"));
     }
     public async Task<ExtensionOperation> DescribeAsync(string id, string operation, string generation, CancellationToken ct = default)
-    { await InitializeAsync(ct); lock (sync) return Find(id, operation, generation).Operation; }
+    { await InitializeAsync(Name(id), ct); lock (sync) return Find(id, operation, generation).Operation; }
     public async Task<ExtensionSummary> ReloadAsync(ExtensionReloadRequest request, CancellationToken ct = default)
-    { await InitializeAsync(ct); return await ReloadCoreAsync(request, ct); }
+    {
+        await initialize.WaitAsync(ct);
+        try { return await ReloadCoreAsync(request, ct); }
+        finally { initialize.Release(); }
+    }
 
-    private async Task InitializeAsync(CancellationToken ct)
+    private async Task InitializeAsync(string? id, CancellationToken ct)
     {
         await initialize.WaitAsync(ct);
         try
         {
-            if (initialized) return;
             ObjectDisposedException.ThrowIf(disposed, this);
+            if (id is null ? initialized : attempted.Contains(id)) return;
+            lock (sync) if (shutdownFenced) throw Error("service_stopping", "Extension initialization admission is fenced for service shutdown.");
             if (Directory.Exists(root))
             {
                 ProjectService.RejectLinks(root);
-                foreach (var directory in Directory.GetDirectories(root).Order())
+                var ids = id is null ? Directory.GetDirectories(root).Order().Select(Path.GetFileName) : [id];
+                foreach (var selected in ids)
                 {
-                    var pointer = Path.Combine(directory, "active.json"); if (!File.Exists(pointer)) continue;
-                    try { await ReloadCoreAsync(new(Path.GetFileName(directory)), ct); }
-                    catch (Exception ex) when (ex is not OperationCanceledException) { lock (sync) errors.Add(Path.GetFileName(directory) + ": " + ex.Message); }
+                    ct.ThrowIfCancellationRequested();
+                    if (attempted.Contains(selected!)) continue;
+                    var pointer = Path.Combine(root, selected!, "active.json"); if (!File.Exists(pointer)) continue;
+                    try { await ReloadCoreAsync(new(selected!), ct); }
+                    catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
+                    { attempted.Add(selected!); lock (sync) errors.Add(selected + ": " + ex.Message); }
                 }
             }
-            initialized = true;
+            if (id is null) initialized = true;
         }
         finally { initialize.Release(); }
     }
@@ -147,17 +160,20 @@ public sealed class ExtensionHost : IDisposable
             }
             var summary = new ExtensionSummary(id, version, Guid.NewGuid().ToString("N"), hash, operations, 0, "active", package.ParallelWorkers, package.ReleaseIdleWorkers);
             // Persist activation only after validation/health. Failure leaves the old generation selected.
-            AtomicText(ledger, hash); Save(SafePath(root, id, "active.json"), new ExtensionPointer(version));
             lock (sync)
             {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                timeout.Token.ThrowIfCancellationRequested();
+                AtomicText(ledger, hash); Save(SafePath(root, id, "active.json"), new ExtensionPointer(version));
                 if (active.Remove(id, out var old))
                 { old.Retired = true; if (old.Leases == 0) DisposeWorker(old.Worker); else retired.Add(old); }
                 active.Add(id, new(summary, worker)); worker = null;
+                attempted.Add(id);
                 errors.RemoveAll(x => x.StartsWith(id + ":", StringComparison.Ordinal));
             }
             Audit("reload", id, summary.Generation, version); return summary;
         }
-        catch (Exception ex) when (ex is IOException or JsonException or ArgumentException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or JsonException or ArgumentException || ex is InvalidOperationException and not ObjectDisposedException)
         { throw Error("invalid_extension", ex.Message); }
         finally { if (worker is not null) DisposeWorker(worker); reload.Release(); }
     }
@@ -196,13 +212,13 @@ public sealed class ExtensionHost : IDisposable
     }
     public async Task<JsonElement> InvokeAsync(string effect, ExtensionCall call, CancellationToken ct = default)
     {
-        await InitializeAsync(ct); var generation = Pin(effect, call);
+        await InitializeAsync(Name(call.ExtensionId), ct); var generation = Pin(effect, call);
         Audit("invoke", call.ExtensionId, call.Generation, call.Operation + ":" + effect);
         return await InvokePinnedAsync(generation, call, ct);
     }
     public async Task<ExtensionJob> StartJobAsync(ExtensionJobRequest request, CancellationToken ct = default)
     {
-        await InitializeAsync(ct); Generation generation;
+        await InitializeAsync(Name(request.Call.ExtensionId), ct); Generation generation;
         lock (sync)
         {
             if (jobs.Values.Count(x => x.Job.Status is "queued" or "running") >= 32) throw Error("extension_busy", "At most 32 extension jobs can be active.");

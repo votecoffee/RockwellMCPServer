@@ -76,7 +76,11 @@ The bridge tools are:
 | `studio_extensions_get_job` | Read a job; omit its ID to list the latest 100 |
 | `studio_extensions_cancel_job` | Request cancellation; no rollback |
 
-Always read the current catalog/description. A call includes:
+Always read the current catalog/description.
+
+An explicit `extensionId` loads only that extension's selected package. Describing or invoking it does not initialize unrelated packages. An unfiltered catalog loads the remaining startup selections and retains already validated generations. Concurrent initialization requests serialize; canceling a waiting request does not cancel another request's validation. A canceled candidate stays unselected, while successful earlier loads remain active. Load errors identify attempted packages, remain visible in subsequent catalogs and require an explicit reload after repair. A filtered catalog does not assess packages that have not been requested.
+
+A call includes:
 
 ```json
 {

@@ -274,8 +274,7 @@ app.MapGet("/api/broker/workflow", (string workflowId, string expectedRevision) 
 app.MapGet("/api/broker/reference", (string workflowId, string expectedRevision, string referenceId, string expectedSha256) => AppPublication.Reference(workflowId, expectedRevision, referenceId, expectedSha256));
 app.MapGet("/api/extensions", async (ExtensionHost host, bool? includeSchemas, string? extensionId, CancellationToken ct) =>
 {
-    var catalog = await host.CatalogAsync(ct);
-    if (extensionId is not null) catalog = catalog with { Extensions = catalog.Extensions.Where(x => x.Id == extensionId).ToArray() };
+    var catalog = await host.CatalogAsync(extensionId, ct);
     if (includeSchemas == false) return Results.Json(new
     {
         catalog.ProtocolVersion, catalog.LoadErrors,
