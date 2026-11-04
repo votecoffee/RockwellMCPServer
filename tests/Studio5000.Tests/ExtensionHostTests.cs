@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using Studio5000.Core;
 using Studio5000.Extensibility;
 using Xunit;
@@ -199,15 +200,41 @@ public sealed class ExtensionHostTests : IDisposable
         Assert.Equal("1", Assert.Single((await restarted.CatalogAsync()).Extensions).Version);
         Assert.Equal("indeterminate", restarted.Job(job.Id).Status);
     }
+    [Fact]
+    public async Task CompletedJobReleasesItsLargeWorkerResultWhileItsDurableReceiptRemainsReadable()
+    {
+        Package("1"); var summary = await host.ReloadAsync(new("demo", "1")); workers[0].LargeResult = true;
+        var job = await host.StartJobAsync(new("read", Call(summary)));
+        for (var i = 0; i < 200 && host.Job(job.Id).Status is "queued" or "running"; i++) await Task.Delay(10);
+        Assert.Equal("succeeded", host.Job(job.Id).Status); Assert.Equal(0, host.ManagementActivity());
+        var weak = Assert.Single(workers[0].ResultDocuments);
+        for (var i = 0; i < 10 && DocumentAlive(weak); i++)
+        {
+            await Task.Delay(20); GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        }
+        Assert.False(DocumentAlive(weak));
+        Assert.Equal(2 * 1024 * 1024, host.Job(job.Id).Result!.Value.GetProperty("payload").GetString()!.Length);
+        Assert.Single(host.Jobs()); Assert.True(host.TryFenceShutdown()); host.ReleaseShutdownFence();
+        GC.KeepAlive(host); GC.KeepAlive(workers[0]);
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool DocumentAlive(WeakReference<JsonDocument> weak) => weak.TryGetTarget(out _);
     public void Dispose() { host.Dispose(); Directory.Delete(root, true); }
     private sealed class FakeWorker(ExtensionOperation[] operations, int number) : IExtensionWorker
     {
-        public bool Block, Disposed, Fail;
+        public bool Block, Disposed, Fail, LargeResult;
         public int Calls;
+        public readonly List<WeakReference<JsonDocument>> ResultDocuments = [];
         public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously), Finish = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<ExtensionOperation[]> DescribeAsync(CancellationToken ct) => Task.FromResult(operations);
         public async Task<JsonElement> InvokeAsync(string operation, JsonElement arguments, CancellationToken ct)
-        { Calls++; Started.TrySetResult(); if (Block) await Finish.Task.WaitAsync(ct); if (Fail) throw new IOException("Synthetic operation outcome uncertain"); return J(new { worker = number }); }
+        { Calls++; Started.TrySetResult(); if (Block) await Finish.Task.WaitAsync(ct); if (Fail) throw new IOException("Synthetic operation outcome uncertain"); return LargeResult ? LargeOutput() : J(new { worker = number }); }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private JsonElement LargeOutput()
+        {
+            var document = JsonDocument.Parse("{\"payload\":\"" + new string('x', 2 * 1024 * 1024) + "\"}");
+            ResultDocuments.Add(new(document)); return document.RootElement;
+        }
         public void Dispose() { Disposed = true; Finish.TrySetResult(); }
     }
 }

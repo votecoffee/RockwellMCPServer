@@ -234,7 +234,7 @@ public sealed class ExtensionHost : IDisposable
         var job = new ExtensionJob(Guid.NewGuid().ToString("N"), request.Call.ExtensionId, request.Call.Operation, request.Call.Generation,
             request.Effect, "queued", DateTimeOffset.UtcNow);
         var cancel = new CancellationTokenSource();
-        try { lock (sync) { Save(JobPath(job.Id), job); jobs.Add(job.Id, (job, cancel)); Audit("job_started", job.ExtensionId, job.Generation, job.Id + ":" + job.Operation); } }
+        try { lock (sync) { Save(JobPath(job.Id), job); jobs.Add(job.Id, (RuntimeJob(job), cancel)); Audit("job_started", job.ExtensionId, job.Generation, job.Id + ":" + job.Operation); } }
         catch (Exception failure)
         {
             try { RejectUndispatchedJob(job, cancel, failure); }
@@ -262,7 +262,7 @@ public sealed class ExtensionHost : IDisposable
     private void RejectUndispatchedJob(ExtensionJob job, CancellationTokenSource cancel, Exception failure)
     {
         var rejected = job with { Status = "indeterminate", Error = "Job admission failed before worker dispatch. No extension invocation was started; no automatic retry was performed. " + failure.Message };
-        lock (sync) jobs[job.Id] = (rejected, cancel);
+        lock (sync) jobs[job.Id] = (RuntimeJob(rejected), cancel);
         try { Update(rejected); }
         catch (Exception error) when (JobStorageFailure(error))
         { JobDiagnostic(job.Id, "Undispatched job rejection receipt could not be persisted: " + error.Message); }
@@ -279,7 +279,7 @@ public sealed class ExtensionHost : IDisposable
             var annotated = completion with { Error = completion.Error is null ? warning : completion.Error + "\n" + warning };
             lock (sync)
             {
-                if (jobs.TryGetValue(completion.Id, out var runtime)) jobs[completion.Id] = (annotated, runtime.Cancel);
+                if (jobs.TryGetValue(completion.Id, out var runtime)) jobs[completion.Id] = (RuntimeJob(annotated), runtime.Cancel);
                 // Update may already have pruned this completed job from memory.
                 // Its durable receipt still retains its actual outcome and result.
                 try { Save(JobPath(completion.Id), annotated); }
@@ -298,11 +298,13 @@ public sealed class ExtensionHost : IDisposable
             errors.Add(prefix + id + ": " + detail[..Math.Min(detail.Length, 2048)]);
         }
     }
+    // Job readers use durable receipts; scheduling needs no result or error payload.
+    private static ExtensionJob RuntimeJob(ExtensionJob job) => job with { Result = null, Error = null };
     private void Update(ExtensionJob job)
     {
         lock (sync)
         {
-            var runtime = jobs[job.Id]; jobs[job.Id] = (job, runtime.Cancel); Save(JobPath(job.Id), job);
+            var runtime = jobs[job.Id]; jobs[job.Id] = (RuntimeJob(job), runtime.Cancel); Save(JobPath(job.Id), job);
             foreach (var old in jobs.Values.Where(x => x.Job.Status is not ("queued" or "running")).OrderByDescending(x => x.Job.CreatedAt).Skip(100).ToArray())
             { jobs.Remove(old.Job.Id); old.Cancel.Dispose(); }
         }
