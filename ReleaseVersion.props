@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
-    <RockwellDisplayVersion>26.1103.222151</RockwellDisplayVersion>
-    <RockwellPackageVersion>26.1103.222151</RockwellPackageVersion>
-    <RockwellAssemblyVersion>26.1103.2221.51</RockwellAssemblyVersion>
+    <RockwellDisplayVersion>26.1103.233514</RockwellDisplayVersion>
+    <RockwellPackageVersion>26.1103.233514</RockwellPackageVersion>
+    <RockwellAssemblyVersion>26.1103.2335.14</RockwellAssemblyVersion>
   </PropertyGroup>
 </Project>
