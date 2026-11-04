@@ -235,7 +235,12 @@ public sealed class ExtensionHost : IDisposable
             request.Effect, "queued", DateTimeOffset.UtcNow);
         var cancel = new CancellationTokenSource();
         try { lock (sync) { Save(JobPath(job.Id), job); jobs.Add(job.Id, (job, cancel)); Audit("job_started", job.ExtensionId, job.Generation, job.Id + ":" + job.Operation); } }
-        catch { Release(generation); cancel.Dispose(); throw; }
+        catch (Exception failure)
+        {
+            try { RejectUndispatchedJob(job, cancel, failure); }
+            finally { Release(generation); cancel.Dispose(); }
+            throw;
+        }
         _ = Task.Run(async () =>
         {
             var dispatched = false;
@@ -249,10 +254,49 @@ public sealed class ExtensionHost : IDisposable
             }
             catch (Exception ex)
             { completion = job with { Status = "indeterminate", Error = ex.Message + " No rollback or automatic retry was performed." }; }
-            finally { if (!dispatched) Release(generation); Audit("job_finished", job.ExtensionId, job.Generation, job.Id); }
-            Update(completion);
+            finally { if (!dispatched) Release(generation); }
+            CompleteJob(completion);
         });
         return job;
+    }
+    private void RejectUndispatchedJob(ExtensionJob job, CancellationTokenSource cancel, Exception failure)
+    {
+        var rejected = job with { Status = "indeterminate", Error = "Job admission failed before worker dispatch. No extension invocation was started; no automatic retry was performed. " + failure.Message };
+        lock (sync) jobs[job.Id] = (rejected, cancel);
+        try { Update(rejected); }
+        catch (Exception error) when (JobStorageFailure(error))
+        { JobDiagnostic(job.Id, "Undispatched job rejection receipt could not be persisted: " + error.Message); }
+    }
+    private void CompleteJob(ExtensionJob completion)
+    {
+        // The operation outcome must be published before optional completion auditing.
+        Update(completion);
+        try { Audit("job_finished", completion.ExtensionId, completion.Generation, completion.Id); }
+        catch (Exception error) when (JobStorageFailure(error))
+        {
+            var warning = "Job completion audit write failed: " + error.Message;
+            JobDiagnostic(completion.Id, warning);
+            var annotated = completion with { Error = completion.Error is null ? warning : completion.Error + "\n" + warning };
+            lock (sync)
+            {
+                if (jobs.TryGetValue(completion.Id, out var runtime)) jobs[completion.Id] = (annotated, runtime.Cancel);
+                // Update may already have pruned this completed job from memory.
+                // Its durable receipt still retains its actual outcome and result.
+                try { Save(JobPath(completion.Id), annotated); }
+                catch (Exception receiptError) when (JobStorageFailure(receiptError))
+                { JobDiagnostic(completion.Id, warning + "; warning receipt could not be persisted: " + receiptError.Message); }
+            }
+        }
+    }
+    private static bool JobStorageFailure(Exception error) => error is IOException or UnauthorizedAccessException;
+    private void JobDiagnostic(string id, string detail)
+    {
+        const string prefix = "Job storage: ";
+        lock (sync)
+        {
+            errors.RemoveAll(error => error.StartsWith(prefix, StringComparison.Ordinal));
+            errors.Add(prefix + id + ": " + detail[..Math.Min(detail.Length, 2048)]);
+        }
     }
     private void Update(ExtensionJob job)
     {

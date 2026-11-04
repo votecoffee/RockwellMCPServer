@@ -90,6 +90,58 @@ public sealed class ExtensionHostTests : IDisposable
         Assert.Equal(1, (await host.InvokeAsync("read", Call(first))).GetProperty("worker").GetInt32());
     }
     [Fact]
+    public async Task BackgroundAdmissionAuditFailureRetainsRejectionWithoutQueuedSlotsOrWorkerDispatch()
+    {
+        Package("1"); var summary = await host.ReloadAsync(new("demo", "1"));
+        var audit = Path.Combine(options.StateDirectory, "extensions", "audit.jsonl");
+        using (var blocked = new FileStream(audit, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            for (var i = 0; i < 3; i++)
+                await Assert.ThrowsAnyAsync<IOException>(() => host.StartJobAsync(new("read", Call(summary))));
+            Assert.Equal(0, workers[0].Calls);
+            Assert.Equal(0, host.ManagementActivity());
+            Assert.Equal(3, host.Jobs().Length);
+            Assert.All(host.Jobs(), job => { Assert.Equal("indeterminate", job.Status); Assert.Contains("before worker dispatch", job.Error); });
+            Assert.True(host.TryFenceShutdown()); host.ReleaseShutdownFence();
+        }
+        var nextJob = await host.StartJobAsync(new("read", Call(summary)));
+        for (var i = 0; i < 200 && host.Job(nextJob.Id).Status is "queued" or "running"; i++) await Task.Delay(10);
+        Assert.Equal("succeeded", host.Job(nextJob.Id).Status); Assert.Equal(1, workers[0].Calls);
+        Assert.Equal(0, host.ManagementActivity());
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackgroundCompletionAuditFailurePublishesTheActualOutcomeAndReleasesItsSlot(bool operationFails)
+    {
+        Package("1"); var summary = await host.ReloadAsync(new("demo", "1"));
+        workers[0].Block = true; workers[0].Fail = operationFails;
+        var job = await host.StartJobAsync(new("read", Call(summary)));
+        await workers[0].Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var audit = Path.Combine(options.StateDirectory, "extensions", "audit.jsonl");
+        using (var blocked = new FileStream(audit, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            workers[0].Finish.TrySetResult();
+            for (var i = 0; i < 200; i++)
+            {
+                var current = host.Job(job.Id);
+                if (current.Status is not ("queued" or "running") && current.Error?.Contains("audit", StringComparison.OrdinalIgnoreCase) == true) break;
+                await Task.Delay(10);
+            }
+            var completed = host.Job(job.Id);
+            Assert.Equal(operationFails ? "indeterminate" : "succeeded", completed.Status);
+            Assert.Contains("audit", completed.Error!, StringComparison.OrdinalIgnoreCase);
+            if (operationFails) Assert.Contains("Synthetic operation outcome uncertain", completed.Error);
+            else Assert.Equal(1, completed.Result!.Value.GetProperty("worker").GetInt32());
+            Assert.Equal(1, workers[0].Calls); Assert.Equal(0, host.ManagementActivity());
+            Assert.True(host.TryFenceShutdown()); host.ReleaseShutdownFence();
+        }
+        workers[0].Fail = workers[0].Block = false;
+        var nextJob = await host.StartJobAsync(new("read", Call(summary)));
+        for (var i = 0; i < 200 && host.Job(nextJob.Id).Status is "queued" or "running"; i++) await Task.Delay(10);
+        Assert.Equal("succeeded", host.Job(nextJob.Id).Status); Assert.Equal(2, workers[0].Calls);
+    }
+    [Fact]
     public async Task StaleGenerationAndWrongEffectAreRejectedBeforeDispatch()
     {
         Package("1"); next = [Operation("control")]; var first = await host.ReloadAsync(new("demo", "1"));
@@ -150,12 +202,12 @@ public sealed class ExtensionHostTests : IDisposable
     public void Dispose() { host.Dispose(); Directory.Delete(root, true); }
     private sealed class FakeWorker(ExtensionOperation[] operations, int number) : IExtensionWorker
     {
-        public bool Block, Disposed;
+        public bool Block, Disposed, Fail;
         public int Calls;
         public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously), Finish = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<ExtensionOperation[]> DescribeAsync(CancellationToken ct) => Task.FromResult(operations);
         public async Task<JsonElement> InvokeAsync(string operation, JsonElement arguments, CancellationToken ct)
-        { Calls++; Started.TrySetResult(); if (Block) await Finish.Task.WaitAsync(ct); return J(new { worker = number }); }
+        { Calls++; Started.TrySetResult(); if (Block) await Finish.Task.WaitAsync(ct); if (Fail) throw new IOException("Synthetic operation outcome uncertain"); return J(new { worker = number }); }
         public void Dispose() { Disposed = true; Finish.TrySetResult(); }
     }
 }
