@@ -8,6 +8,8 @@ Optional [bounded MCP frontdoor profiles](docs/MCP_FRONTDOOR.md) admit stateless
 
 Frontend requests release their local call permits even when forwarding-lease cleanup fails. The failure remains visible and later explicit requests can be admitted under the existing limits.
 
+Frontend metadata startup uses one validated registry snapshot within its held admission lock for reconciliation, conflict checks and capacity counting. Each new admission reads a fresh snapshot and preserves unresolved ownership history.
+
 The immutable frontdoor policy can select `existing-genuine-only` to use an already-running verified service. Before any owner is verified, a later explicit request may observe again after a faulted discovery. That mode cannot start or replace the service; owner loss returns an undispatched refusal until a new connection is opened after recovery. See [existing-service readiness](docs/MCP_READINESS.md). Service autostart uses the separate `ensure-pinned-offline` scope.
 
 [CodexMCPBroker](https://github.com/votecoffee/CodexMCPBroker) provides the separately maintained shared application framework and Windows MCP Service Manager. Rockwell remains a standalone MCP server with its own app-owned Codex plugin and skills. The optional framework host and separate management app require no universal plugin; Rockwell retains reviewed dependency pins and deployment-specific acceptance.

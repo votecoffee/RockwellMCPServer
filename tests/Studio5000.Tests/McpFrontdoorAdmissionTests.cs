@@ -30,6 +30,67 @@ public sealed class McpFrontdoorAdmissionTests : IDisposable
     public void Dispose() => Directory.Delete(root, true);
 
     [Fact]
+    public void Session_open_scans_history_once_without_changing_unrelated_claims()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        execution.Owner("rockwell-mcp-server").BeginLaunch("Preserved uncertain native fixture", "sdk-worker");
+        var original = Directory.GetFiles(execution.DirectoryPath, "*.json").ToDictionary(p => p, File.ReadAllBytes);
+        var reads = 0; metadata.BeforeRecordsRead = () => reads++;
+        using var session = McpFrontdoorSession.Open(root, Path.Combine(root, "registry"), new(), default, metadata);
+        Assert.Equal(1, reads);
+        Assert.Equal("active", session.Record.State);
+        Assert.All(original, entry => Assert.Equal(entry.Value, File.ReadAllBytes(entry.Key)));
+    }
+
+    [Theory]
+    [InlineData("absent")] [InlineData("unknown")] [InlineData("barrier")] [InlineData("member-conflict")]
+    public void Combined_admission_keeps_the_same_reconciliation_and_conflict_rules(string condition)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var old = metadata.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId).AdmitFrontdoor();
+        if (condition == "barrier") old = old with { RecoveryBarrier = "Retain uncertainty" };
+        var path = Path.Combine(metadata.DirectoryPath, old.ResourceId + ".json");
+        var bytes = ResourceJson.Write(old); File.WriteAllBytes(path, bytes);
+        if (condition == "member-conflict")
+        {
+            var conflict = old with { ResourceId = Guid.NewGuid().ToString("N"), AppId = "other-app", Owner = Identity(900), Members = [old.Owner] };
+            File.WriteAllBytes(Path.Combine(metadata.DirectoryPath, conflict.ResourceId + ".json"), ResourceJson.Write(conflict));
+        }
+        driver.Current = Identity(200, "new.exe"); driver.States[old.Owner] = condition == "unknown" ? "unknown" : "absent";
+        var reads = 0; metadata.BeforeRecordsRead = () => reads++;
+        var record = metadata.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId).AdmitFrontdoor([old.Owner.Executable]);
+        Assert.Equal(1, reads); Assert.Equal("active", record.State);
+        if (condition == "absent") Assert.Equal("released", metadata.Get(old.ResourceId).State);
+        else Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Combined_admission_rescans_before_each_capacity_decision()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = new ResourceLedger(Path.Combine(root, "fresh-registry"), driver, 1);
+        var first = ledger.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId); first.AdmitFrontdoor();
+        var reads = 0; ledger.BeforeRecordsRead = () => reads++;
+        var next = ledger.Owner(ResourceLedger.ResourceOwner.FrontdoorAppId);
+        Assert.Throws<InvalidOperationException>(() => next.AdmitFrontdoor([first.Identity.Executable]));
+        Assert.Equal(1, reads);
+    }
+
+    [Fact]
+    public void Malformed_history_is_not_skipped_and_failed_open_releases_its_os_slot()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        execution.Owner("rockwell-mcp-server").BeginLaunch("Preserved claim", "sdk-worker");
+        var invalid = Path.Combine(metadata.DirectoryPath, Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(invalid, "{");
+        var policy = new McpFrontdoorPolicy(MaximumMetadataClients: 1, MaximumStartingClients: 1);
+        Assert.ThrowsAny<JsonException>(() => McpFrontdoorSession.Open(root, Path.Combine(root, "registry"), policy, default, metadata));
+        File.Delete(invalid); // Only this fixture's malformed file.
+        using var session = McpFrontdoorSession.Open(root, Path.Combine(root, "registry"), policy, default, metadata);
+        Assert.Equal("active", session.Record.State);
+    }
+
+    [Fact]
     public void Saturated_execution_claims_remain_unchanged_when_metadata_admits_a_self_observation()
     {
         if (!OperatingSystem.IsWindows()) return;

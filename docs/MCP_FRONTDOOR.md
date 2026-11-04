@@ -10,6 +10,8 @@ The actual frontdoor process owns a typed, processless, attached/report-only `mc
 
 Normal EOF closes admission handles before the exact current actor publishes its revision-bound terminal detach attestation. After a crash, only a positively departed full owner generation with the exact metadata role, reviewed executable path and no receipt/barrier/conflicting identity can be reconciled. Unknown/native/shared/changed observations remain protected. A new version needs a fully pinned predecessor frontdoor policy before cross-version metadata reconciliation.
 
+Startup validates predecessor provenance before taking the ledger lock, then uses one freshly validated, sorted history snapshot for eligible metadata reconciliation, member-conflict checks and admission counting while that lock remains held. Each admission scans again; no snapshot is cached across locks, malformed record is skipped or retained history is migrated.
+
 The real SDK host observes its launcher/parent handles. The immutable `serviceMode` selects its service readiness scope:
 
 - `existing-genuine-only` observes one already-running service with the pinned image/version and verified offline policy. It never invokes startup, replacement, startup-journal publication or execution-claim recovery. Missing/unverified service readiness returns `mcp_existing_service_unavailable`, with `dispatched=false` and `automaticRetry=false`. Initial observation is cached for this connection; owner loss or failed initial observation requires a new connection after operator recovery. Initialize/tool listing remain available without a service.

@@ -33,6 +33,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     public string DirectoryPath { get; } = Path.Combine(Path.GetFullPath(registry), "resources");
     internal IResourceProcessDriver Driver => driver;
     internal int MaximumActive => maximumActivePerApp;
+    internal Action? BeforeRecordsRead { get; set; }
     private static double Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d;
     private string RecordPath(string id) { ResourceRules.Token(id, 32); return Path.Combine(DirectoryPath, id + ".json"); }
     public ResourceRecord Get(string id)
@@ -48,6 +49,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     public ResourceRecord[] Records()
     {
         if (!Directory.Exists(DirectoryPath)) return [];
+        BeforeRecordsRead?.Invoke();
         ProjectService.RejectLinks(DirectoryPath);
         var names = new List<string>();
         foreach (var name in Directory.EnumerateFiles(DirectoryPath, "*.json"))
@@ -237,11 +239,20 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
         });
         internal const string FrontdoorAppId = "rockwell-mcp-frontdoor";
         internal const string FrontdoorLabel = "Rockwell MCP metadata frontdoor";
-        internal ResourceRecord AdmitFrontdoor() => ledger.Locked(() =>
+        internal ResourceRecord AdmitFrontdoor(string[]? reviewedImages = null) => ledger.Locked(() =>
         {
             if (closing || AppId != FrontdoorAppId || ledger.Driver.CurrentIdentity().Normalize() != Identity)
                 throw new InvalidOperationException("Frontdoor admission requires its actual current process owner.");
             var records = ledger.Records();
+            // Reuse this validated corpus only while this ledger lock is held.
+            if (reviewedImages is not null)
+                for (var i = 0; i < records.Length; i++)
+                {
+                    var old = records[i];
+                    if (old.AppId != AppId || old.Terminal || !reviewedImages.Contains(old.Owner.Executable, StringComparer.OrdinalIgnoreCase)) continue;
+                    var reconciled = ReconcileExitedFrontdoorLocked(old, old.Revision, old.Owner.Executable, records);
+                    if (reconciled is not null) records[i] = reconciled;
+                }
             if (records.Length >= 4096 || records.Count(r => r.AppId == AppId && !r.Terminal) >= ledger.MaximumActive)
                 throw new InvalidOperationException("Metadata frontdoor claim budget reached; retain unresolved evidence.");
             var record = new ResourceRecord { ResourceId = Guid.NewGuid().ToString("N"), AppId = AppId, OwnerId = OwnerId, Owner = Identity,
@@ -266,15 +277,20 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
         {
             if (closing || AppId != FrontdoorAppId || ledger.Driver.CurrentIdentity().Normalize() != Identity)
                 throw new InvalidOperationException("Frontdoor reconciliation requires its actual current owner.");
-            var record = ledger.Get(id);
+            return ReconcileExitedFrontdoorLocked(ledger.Get(id), revision, reviewedImage);
+        });
+        private ResourceRecord? ReconcileExitedFrontdoorLocked(ResourceRecord record, string revision, string reviewedImage, ResourceRecord[]? lockedRecords = null)
+        {
+            if (closing || AppId != FrontdoorAppId || ledger.Driver.CurrentIdentity().Normalize() != Identity)
+                throw new InvalidOperationException("Frontdoor reconciliation requires its actual current owner.");
             if (record.Revision != revision || !FrontdoorShape(record) ||
                 !string.Equals(record.Owner.Executable, Path.GetFullPath(reviewedImage), StringComparison.OrdinalIgnoreCase) ||
                 ledger.Driver.State(record.Owner) is not ("absent" or "different") ||
-                ledger.Records().Any(other => other.ResourceId != id && !other.Terminal &&
+                (lockedRecords ?? ledger.Records()).Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
                     (other.Owner == record.Owner || other.Process == record.Owner || other.Members.Contains(record.Owner)))) return null;
             return ledger.Replace(record with { State = "released", Reconciliation = new ResourceReconciliation(OwnerId, Identity, revision,
                 "Exact departed stateless frontdoor process generation independently verified. Observation only; no process action, native recovery or operation replay.", Now).Normalize() });
-        });
+        }
         public ResourceRecord Reconcile(string id, string revision, string evidence) => ledger.Locked(() =>
         {
             var record = ledger.Get(id);
