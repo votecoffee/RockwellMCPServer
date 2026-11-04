@@ -10,6 +10,7 @@
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/module-connections.md" LogicalName="Workflow.module-connections-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/structural-edits.md" LogicalName="Workflow.structural-reference" />
     <EmbeddedResource Include="../../workflows/rockwell-engineering/references/routine-import-packages.md" LogicalName="Workflow.routine-import-reference" />
+    <EmbeddedResource Include="../../workflows/rockwell-engineering/references/program-import-packages.md" LogicalName="Workflow.program-import-reference" />
     <EmbeddedResource Include="../../workflows/logix-online-edits/SKILL.md" LogicalName="Workflow.online" />
     <EmbeddedResource Include="../../workflows/logix-online-edits/references/studio-workflow.md" LogicalName="Workflow.online-reference" />
     <EmbeddedResource Include="../../workflows/factorytalk-studio/SKILL.md" LogicalName="Workflow.factorytalk" />
