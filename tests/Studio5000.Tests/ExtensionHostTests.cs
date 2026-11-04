@@ -58,6 +58,26 @@ public sealed class ExtensionHostTests : IDisposable
         Assert.True(workers[0].Disposed); Assert.Single((await host.CatalogAsync()).Extensions);
     }
     [Theory]
+    [InlineData("read")]
+    [InlineData("apply")]
+    public async Task RepeatedAuditRejectionsReleaseTheLeaseWithoutDispatchingOrRetainingADrainingWorker(string effect)
+    {
+        Package("1"); next = [Operation(effect)]; var first = await host.ReloadAsync(new("demo", "1"));
+        var audit = Path.Combine(options.StateDirectory, "extensions", "audit.jsonl");
+        using (var blocked = new FileStream(audit, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            for (var i = 0; i < 3; i++)
+                await Assert.ThrowsAnyAsync<IOException>(() => host.InvokeAsync(effect, Call(first)));
+            Assert.Equal(0, workers[0].Calls);
+            Assert.Equal(0, host.ManagementActivity());
+            Assert.Equal(0, Assert.Single((await host.CatalogAsync()).Extensions).ActiveCalls);
+        }
+        Package("2"); var second = await host.ReloadAsync(new("demo", "2", first.Generation));
+        Assert.True(workers[0].Disposed); Assert.Single((await host.CatalogAsync()).Extensions);
+        Assert.Equal(2, (await host.InvokeAsync(effect, Call(second))).GetProperty("worker").GetInt32());
+        Assert.Equal(0, host.ManagementActivity()); Assert.True(host.TryFenceShutdown()); host.ReleaseShutdownFence();
+    }
+    [Theory]
     [InlineData(true, 1, "fixture.dll")]
     [InlineData(false, 99, "fixture.dll")]
     [InlineData(false, 1, "../fixture.dll")]

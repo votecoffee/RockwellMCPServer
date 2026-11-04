@@ -219,7 +219,8 @@ public sealed class ExtensionHost : IDisposable
     public async Task<JsonElement> InvokeAsync(string effect, ExtensionCall call, CancellationToken ct = default)
     {
         await InitializeAsync(Name(call.ExtensionId), ct); var generation = Pin(effect, call);
-        Audit("invoke", call.ExtensionId, call.Generation, call.Operation + ":" + effect);
+        try { Audit("invoke", call.ExtensionId, call.Generation, call.Operation + ":" + effect); }
+        catch { Release(generation); throw; } // No worker received ownership of this lease.
         return await InvokePinnedAsync(generation, call, ct);
     }
     public async Task<ExtensionJob> StartJobAsync(ExtensionJobRequest request, CancellationToken ct = default)
