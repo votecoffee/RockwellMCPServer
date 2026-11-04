@@ -5,10 +5,11 @@ using System.Text.Json;
 using Studio5000.Client;
 using Studio5000.Core;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Studio5000.Tests;
 
-public sealed class SdkJobHistoryTests
+public sealed class SdkJobHistoryTests(ITestOutputHelper output)
 {
     private static string Job(int index, int payloadBytes = 0) => JsonSerializer.Serialize(new
     {
@@ -20,6 +21,58 @@ public sealed class SdkJobHistoryTests
         error = index == 0 ? "Inspect before retrying" : null
     });
     private static byte[] History(int count, int payloadBytes = 0) => Encoding.UTF8.GetBytes("[" + string.Join(",", Enumerable.Range(0, count).Select(i => Job(i, payloadBytes))) + "]");
+
+    [Fact]
+    public async Task Small_page_does_not_allocate_the_full_response_budget()
+    {
+        var bytes = History(6);
+        using (var warm = new MemoryStream(bytes, false)) await SdkJobHistory.ReadAsync(warm);
+        using var source = new MemoryStream(bytes, false);
+        var thread = Environment.CurrentManagedThreadId;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var task = SdkJobHistory.ReadAsync(source);
+        var synchronous = task.IsCompletedSuccessfully;
+        var page = await task;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"Small-page allocated bytes: {allocated}; input bytes: {bytes.Length}");
+        Assert.True(synchronous); Assert.Equal(thread, Environment.CurrentManagedThreadId);
+        Assert.Equal(5, page.Items.Length); Assert.True(page.HasMore);
+        Assert.InRange(allocated, 1, 256 * 1024);
+    }
+
+    [Theory]
+    [InlineData(65537)] [InlineData(196613)]
+    public async Task Large_split_token_can_finish_at_the_exact_cap_and_one_byte_less_still_refuses(int payloadBytes)
+    {
+        var bytes = History(1, payloadBytes);
+        using var source = new ObservedStream(bytes, 997);
+        var page = await SdkJobHistory.ReadAsync(source, maximumResponseBytes: bytes.Length);
+        Assert.Equal("job-0", Assert.Single(page.Items).Id);
+        Assert.Equal(bytes.Length, page.ResponseBytesRead); Assert.False(page.HasMore);
+        using var shortBudget = new ObservedStream(bytes, 997);
+        var error = await Assert.ThrowsAsync<ServiceErrorException>(() => SdkJobHistory.ReadAsync(shortBudget, maximumResponseBytes: bytes.Length - 1));
+        Assert.Equal("sdk_job_history_limit", error.Error.Code);
+        Assert.Equal(bytes.Length - 1, shortBudget.BytesRead);
+    }
+
+    [Fact]
+    public async Task Malformed_large_token_keeps_the_same_typed_error_after_buffer_growth()
+    {
+        using var source = new ObservedStream(Encoding.UTF8.GetBytes("[{\"ignored\":\"" + new string('x', 128 * 1024)));
+        var error = await Assert.ThrowsAsync<ServiceErrorException>(() => SdkJobHistory.ReadAsync(source));
+        Assert.Equal("sdk_job_history_invalid", error.Error.Code);
+        Assert.True(source.BytesRead > 65536);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_buffer_growth_stops_before_another_read()
+    {
+        using var cancel = new CancellationTokenSource();
+        using var source = new ObservedStream(History(1, 256 * 1024), afterRead: count => { if (count > 128 * 1024) cancel.Cancel(); });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SdkJobHistory.ReadAsync(source, ct: cancel.Token));
+        Assert.InRange(source.BytesRead, 128 * 1024 + 1, 192 * 1024);
+        Assert.True(source.BytesRead < source.Length);
+    }
 
     [Fact]
     public async Task Oversized_legacy_history_yields_a_small_summary_page_without_reading_the_full_body()
@@ -170,7 +223,7 @@ public sealed class SdkJobHistoryTests
         await fixture.Completed; Assert.Single(fixture.Paths);
     }
 
-    private sealed class ObservedStream(byte[] bytes, int chunk = 65536) : MemoryStream(bytes, false)
+    private sealed class ObservedStream(byte[] bytes, int chunk = 65536, Action<int>? afterRead = null) : MemoryStream(bytes, false)
     {
         public int BytesRead { get; private set; }
         public int MaximumRead { get; private set; }
@@ -178,7 +231,7 @@ public sealed class SdkJobHistoryTests
         {
             MaximumRead = Math.Max(MaximumRead, buffer.Length);
             var read = await base.ReadAsync(buffer[..Math.Min(chunk, buffer.Length)], cancellationToken);
-            BytesRead += read; return read;
+            BytesRead += read; afterRead?.Invoke(BytesRead); return read;
         }
     }
 

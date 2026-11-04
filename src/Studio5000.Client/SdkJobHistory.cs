@@ -15,6 +15,7 @@ public static class SdkJobHistory
 {
     public const int MaximumBytes = 8 * 1024 * 1024;
     public const int SourceWindowLimit = 100;
+    private const int InitialBufferBytes = 64 * 1024;
 
     public static void ValidatePage(int offset, int limit)
     {
@@ -27,8 +28,9 @@ public static class SdkJobHistory
     {
         ValidatePage(offset, limit);
         if (maximumResponseBytes is < 1 or > MaximumBytes) throw new ArgumentOutOfRangeException(nameof(maximumResponseBytes));
-        // One fixed input buffer. No JsonDocument/whole-job DOM or growing token buffer.
-        var buffer = new byte[maximumResponseBytes];
+        // Completed tokens live in JsonReaderState, not a whole-job DOM. Only
+        // an incomplete token can require a larger contiguous input buffer.
+        var buffer = new byte[Math.Min(InitialBufferBytes, maximumResponseBytes)];
         var parser = new Parser(offset, limit); var buffered = 0; var total = 0;
         try
         {
@@ -37,8 +39,13 @@ public static class SdkJobHistory
                 ct.ThrowIfCancellationRequested();
                 if (total == maximumResponseBytes)
                     throw Error("sdk_job_history_limit", "The SDK history prefix reached the response byte limit before a complete page and lookahead. Use a smaller/earlier page or studio_sdk_get_job with a known ID. Deeper history requires a future service summary API; no jobs were changed.", 413);
+                // Grow only when the unconsumed tail fills the buffer. The
+                // independent total still counts every byte read, including
+                // completed tokens that have already been compacted away.
+                if (buffered == buffer.Length)
+                    Array.Resize(ref buffer, Math.Min(buffer.Length * 2, maximumResponseBytes));
                 var read = await source.ReadAsync(buffer.AsMemory(buffered,
-                    Math.Min(65536, maximumResponseBytes - total)), ct);
+                    Math.Min(InitialBufferBytes, Math.Min(buffer.Length - buffered, maximumResponseBytes - total))), ct);
                 buffered += read; total += read;
                 var consumed = parser.Consume(buffer.AsSpan(0, buffered), read == 0, ct);
                 if (parser.Done)
