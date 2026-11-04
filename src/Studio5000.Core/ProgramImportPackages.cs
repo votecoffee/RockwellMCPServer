@@ -8,7 +8,7 @@ namespace Studio5000.Core;
 
 public sealed record ProgramImportPackageRequest(MergeSnapshot Source, MergeSnapshot Baseline, string ProgramName,
     string TaskName, string[]? ChangedRoutines = null, string[]? NewControllerTags = null, string[]? NewDataTypes = null,
-    ProgramImportSchemaRequest? Schema = null);
+    ProgramImportSchemaRequest? Schema = null, string DependencyMode = LogixTypeDependencies.SourceClosure);
 public sealed record ProgramImportDefinition(string Kind, string Name, string RawSha256, string CanonicalSha256,
     string Disposition, int? ContentItems = null);
 public sealed record ProgramImportValuePolicy(bool PreserveExistingOfflineValuesCheckboxRequired,
@@ -20,7 +20,8 @@ public sealed record ProgramImportManifest(int SchemaVersion, string Kind, Merge
     ProgramImportSchemaReport Schema, string[] NativeSteps, string DependencyCoverage, string Boundary,
     bool PackagingOnly = true, bool NativeImportAccepted = false, string ImportOperation = "overwrite_program",
     string ReplacementScope = "all_routines_and_local_tags", string SchedulePolicy = "preserve_existing_task_and_order",
-    bool RungInsertion = false);
+    bool RungInsertion = false, string DependencyMode = LogixTypeDependencies.SelectedNewOnly,
+    TypeDependencyClosure? TypeClosure = null, bool NativePreconfigurationAccepted = false);
 public sealed record ProgramImportContent(byte[] ProgramXml, byte[] ManifestJson, byte[] Zip, ProgramImportManifest Manifest);
 public sealed record ProgramImportPackage(Artifact Program, Artifact Manifest, Artifact Package, ProgramImportManifest Plan);
 public sealed record ProgramImportReadbackRequest(string ManifestArtifactId, string ExpectedManifestSha256,
@@ -32,12 +33,14 @@ public sealed record ProgramImportReadback(bool ProgramMetadataMatches, bool Rou
 public static class ProgramImportPackaging
 {
     public const int MaximumOutputBytes = 32 * 1024 * 1024;
-    public const string Boundary = "Source-bound whole-program overwrite packaging and saved-XML readback only. No import, rung insertion, semantic/compiler validation, native finalization, download or controller connection. All native wrapper/import, edit-state, schedule and value-preservation acceptance remain pending.";
+    public const string Boundary = "Source-bound whole-program overwrite packaging and saved-XML readback only. No import, rung insertion, semantic/compiler validation, native finalization, download or controller connection. All native temporary-project preconfiguration, wrapper/import, edit-state, schedule and value-preservation acceptance remain pending. Fragment XSD/readback is not native acceptance or proof of a failure's cause.";
     private static readonly HashSet<string> BuiltIns = new(StringComparer.OrdinalIgnoreCase)
         { "BOOL", "SINT", "INT", "DINT", "LINT", "REAL", "LREAL", "USINT", "UINT", "UDINT", "ULINT", "STRING", "TIMER", "COUNTER", "CONTROL", "MESSAGE", "DT", "LDT", "TIME", "LTIME", "TIME32", "ITIME", "DATE", "TOD", "LTOD" };
+    internal static bool IsBuiltInType(string name) => BuiltIns.Contains(name) || string.Equals(name, "BIT", StringComparison.OrdinalIgnoreCase);
 
     public static ProgramImportContent Build(byte[] sourceBytes, byte[] baselineBytes, ProgramImportPackageRequest request, byte[]? schemaBytes = null)
     {
+        if (request.DependencyMode is not (LogixTypeDependencies.SourceClosure or LogixTypeDependencies.SelectedNewOnly)) throw Error("dependency_mode", "Choose source_type_closure or explicit legacy selected_new_only.");
         if (request.Source is null || request.Baseline is null ||
             !string.Equals(ProjectService.Hash(sourceBytes), request.Source.Sha256, StringComparison.OrdinalIgnoreCase) || !string.Equals(ProjectService.Hash(baselineBytes), request.Baseline.Sha256, StringComparison.OrdinalIgnoreCase))
             throw Error("source", "Pin the exact source and destination snapshot bytes and SHA-256 values.");
@@ -129,9 +132,20 @@ public static class ProgramImportPackaging
                 throw Error("dependency_missing", "Datatype is not declared by the destination or selected new definitions: " + name);
             checking.Remove(name); checkedTypes.Add(name);
         }
-        foreach (var tag in tags.Concat(globals)) if ((string?)tag.Attribute("DataType") is { Length: > 0 } type) Type(type);
-        foreach (var name in referencedGlobals) if ((string?)sourceGlobals[name].Attribute("DataType") is { Length: > 0 } type) Type(type);
-        foreach (var type in types) Type(Name(type));
+        TypeDependencyClosure? closure = null;
+        if (request.DependencyMode == LogixTypeDependencies.SourceClosure)
+        {
+            closure = LogixTypeDependencies.Resolve(source, baseline, new(request.Source, request.Baseline, request.ProgramName, globals.Select(Name).ToArray(), types.Select(Name).ToArray()));
+            foreach (var required in closure.Definitions.Where(d => !d.ExistingDestinationDefinition))
+                if (!types.Any(t => Same(t, required.Name))) throw Error("dependency_missing", "Explicitly select the newly required type reported by source closure: " + required.Name);
+        }
+        else
+        {
+            foreach (var tag in tags.Concat(globals)) if ((string?)tag.Attribute("DataType") is { Length: > 0 } type) Type(type);
+            foreach (var name in referencedGlobals) if ((string?)sourceGlobals[name].Attribute("DataType") is { Length: > 0 } type) Type(type);
+            foreach (var type in types) Type(Name(type));
+        }
+        var includedTypes = closure is null ? types : closure.Definitions.Select(d => Named(sourceTypes, d.Name)).ToArray();
         var changed = routines.Where(r => oldRoutines.SingleOrDefault(o => Same(o, Name(r))) is not { } old || Canonical(r) != Canonical(old)).Select(Name).ToArray();
         if (request.ChangedRoutines is { } expected && (!Names(expected).SetEquals(changed) || expected.Length != changed.Length))
             throw Error("changed_set", "ChangedRoutines must match the exact changed/new routine set; it is not the set of routines to include.");
@@ -145,16 +159,18 @@ public static class ProgramImportPackaging
         string Attr(string value) => System.Security.SecurityElement.Escape(value)!;
         var text = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<RSLogix5000Content SchemaRevision=\"" + Attr(schemaRevision) + "\" SoftwareRevision=\"" + Attr(softwareRevision) +
             "\" TargetType=\"Program\" TargetName=\"" + Attr(request.ProgramName) + "\" TargetCount=\"1\" ContainsContext=\"true\"><Controller Use=\"Context\" Name=\"" + Attr(controllerName) + "\">" +
-            (types.Length == 0 ? "" : "<DataTypes>" + string.Concat(types.Select(source.Raw)) + "</DataTypes>") +
+            (includedTypes.Length == 0 ? "" : "<DataTypes>" + string.Concat(includedTypes.Select(t => closure is null ? source.Raw(t) : LogixTypeDependencies.ImportRaw(source, t, false))) + "</DataTypes>") +
             (globals.Length == 0 ? "" : "<Tags>" + string.Concat(globals.Select(source.Raw)) + "</Tags>") +
             "<Programs>" + packagedProgram + "</Programs></Controller></RSLogix5000Content>\n";
         var xml = Encoding.UTF8.GetBytes(text); if (xml.Length > MaximumOutputBytes) throw Error("limit", "The import exceeds 32 MiB.");
         var output = new LogixLexicalDocument(xml); var outputProgram = output.Document.Descendants("Program").Single();
-        foreach (var e in routines.Concat(tags).Concat(globals).Concat(types))
+        foreach (var e in routines.Concat(tags).Concat(globals).Concat(includedTypes))
         {
             var candidates = e.Name == "Routine" ? outputProgram.Elements("Routines").Elements("Routine") : e.Name == "DataType" ? output.Document.Root!.Element("Controller")!.Elements("DataTypes").Elements("DataType") :
                 e.Parent?.Parent == program ? outputProgram.Elements("Tags").Elements("Tag") : output.Document.Root!.Element("Controller")!.Elements("Tags").Elements("Tag");
-            if (source.Raw(e) != output.Raw(Named(candidates, Name(e)))) throw Error("preservation", "A selected definition changed during packaging.");
+            var packaged = Named(candidates, Name(e));
+            if (e.Name == "DataType" && closure is not null ? LogixTypeDependencies.ImportRaw(source, e, false) != output.Raw(packaged) : source.Raw(e) != output.Raw(packaged))
+                throw Error("preservation", "A selected definition changed beyond permitted datatype Use metadata during packaging.");
         }
         var schemaReport = new ProgramImportSchemaReport("structure_only", null, true, false, [], []);
         if (request.Schema is { } schemaRequest)
@@ -167,10 +183,10 @@ public static class ProgramImportPackaging
         var definitions = routines.Select(r => Definition(source, r, "routine", changed.Contains(Name(r)) ? "changed" : "retained", ContentCount(r)))
             .Concat(tags.Select(t => Definition(source, t, "local_tag", oldTags.Any(o => Same(o, Name(t))) ? "existing_preserve_values" : "new_initial_values")))
             .Concat(globals.Select(t => Definition(source, t, "controller_tag", "new_initial_values")))
-            .Concat(types.Select(t => Definition(source, t, "datatype", "new_definition"))).ToArray();
+            .Concat(includedTypes.Select(t => Definition(source, t, "datatype", types.Any(n => Same(n, Name(t))) ? "new_definition" : "existing_reference_use_existing"))).ToArray();
         string[] steps = [
             "Review source/baseline hashes, all included routines/local tags and the separately counted changed routine set. Overwrite omissions can delete destination objects; no omitted baseline objects are allowed here.",
-            "Import the whole Program with Operation=Overwrite and the exact existing name. Resolve existing external tags/types/AOIs from the destination; create only the listed new controller tags/datatypes. Do not substitute a rung insertion operation.",
+            "Import the whole Program with Operation=Overwrite and the exact existing name. Review source-bound type context, including legacy nested UDTs. Existing type collisions require Use Existing, never Overwrite; create only the listed new controller tags/datatypes. Destination resolution alone is not native temporary-project preconfiguration evidence. Do not substitute a rung insertion operation.",
             "Keep Preserve existing tag values in offline project selected. Existing online data-table values remain current by the native import contract; new tags use imported initial values. Renames/layout conversion and non-data-table configuration require separate review.",
             "Use the exact recorded task schedule and main/fault routine assignments. For an authorized no-test-interval native workflow, select Finalize All Edits In Program during import; this package performs no finalization or native call. Pending/accepted/testing edits and native correlation must be resolved separately.",
             "Export/read back the resulting program, routine/local-tag set, selected new dependencies, unchanged controller payloads and task schedule. Compare saved values offline; live preservation/runtime behavior needs its own observation.",
@@ -179,13 +195,16 @@ public static class ProgramImportPackaging
         var manifest = new ProgramImportManifest(1, "whole_program_import", request.Source, request.Baseline, request.ProgramName, request.TaskName, controllerName,
             ProjectService.Hash(xml), Hash(programRaw), changed.Length, routines.Length, tags.Length, definitions, globals.Select(Name).ToArray(), types.Select(Name).ToArray(),
             Canonical(task), new(true, "Existing online data-table values are preserved by the native import contract, not observed by this package.", "New tags receive imported initial values; subsequent running logic can change them."),
-            schemaReport, steps, "Explicit new controller tag/type selection with datatype checks and lexical direct RLL/ST/local-alias references. Existing external symbols resolve from the destination. No compiler-bound FBD/SFC/AOI/alias/indirect/reference closure is claimed.", Boundary);
+            schemaReport, steps, closure?.Boundary ?? "Legacy selected_new_only excludes legacy source type context. Destination-only resolution cannot establish native preconfiguration compatibility; no complete source closure or native acceptance is claimed.", Boundary,
+            DependencyMode: request.DependencyMode, TypeClosure: closure);
         var json = JsonSerializer.SerializeToUtf8Bytes(manifest, ProjectService.Json);
         using var zip = new MemoryStream();
         using (var archive = new ZipArchive(zip, ZipArchiveMode.Create, true))
         {
             void Add(string name, byte[] bytes) { var entry = archive.CreateEntry(name); entry.LastWriteTime = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero); using var stream = entry.Open(); stream.Write(bytes); }
             Add("program.l5x", xml); Add("manifest.json", json); Add("README.txt", Encoding.UTF8.GetBytes(string.Join("\n\n", steps) + "\n\n" + Boundary + "\n"));
+            if (closure is not null)
+                foreach (var type in includedTypes) Add("source-type-definitions/" + Name(type) + ".xml", Encoding.UTF8.GetBytes(source.Raw(type)));
         }
         return new(xml, json, zip.ToArray(), manifest);
     }

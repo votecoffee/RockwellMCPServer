@@ -80,11 +80,13 @@ public sealed class ProgramImportPackageTests : IDisposable
         Assert.Equal("program_import_omission", Assert.Throws<OperationException>(() => ProgramImportPackaging.Build(bytes, baseline, Request(bytes, baseline))).Code);
     }
     [Fact]
-    public void Only_selected_new_controller_definitions_are_included_without_hardware_tasks_or_aoi_payloads()
+    public void Source_closure_includes_legacy_type_context_but_only_selected_new_controller_tags()
     {
         var (package, _, _) = Build(); var doc = XmlProjects.Parse(package.ProgramXml); var c = doc.Root!.Element("Controller")!;
         Assert.Equal(["DataTypes", "Tags", "Programs"], c.Elements().Select(e => e.Name.LocalName));
-        Assert.Equal("NewType", (string?)Assert.Single(c.Elements("DataTypes").Elements("DataType")).Attribute("Name"));
+        Assert.Equal(["Existing", "NewType"], c.Elements("DataTypes").Elements("DataType").Select(t => (string?)t.Attribute("Name")));
+        Assert.All(c.Elements("DataTypes").Elements("DataType"), t => Assert.Equal("Reference", (string?)t.Attribute("Use")));
+        Assert.True(package.Manifest.TypeClosure!.CompleteForDeclaredSourceGraph); Assert.False(package.Manifest.NativePreconfigurationAccepted);
         Assert.Equal("NewGlobal", (string?)Assert.Single(c.Elements("Tags").Elements("Tag")).Attribute("Name"));
         Assert.DoesNotContain("Hardware", Encoding.UTF8.GetString(package.ProgramXml));
         Assert.DoesNotContain("UnusedType", Encoding.UTF8.GetString(package.ProgramXml));
@@ -166,7 +168,7 @@ public sealed class ProgramImportPackageTests : IDisposable
         Assert.Equal("program_import_dependency_missing", Assert.Throws<OperationException>(() => ProgramImportPackaging.Build(a, b, Request(a, b) with { NewDataTypes = [] })).Code);
         var changed = XmlProjects.Parse(a); changed.Descendants("DataType").Single(t => (string?)t.Attribute("Name") == "Existing").Descendants("Member").First().SetAttributeValue("Name", "Different");
         var bytes = Bytes(changed);
-        Assert.Equal("program_import_type_conflict", Assert.Throws<OperationException>(() => ProgramImportPackaging.Build(bytes, b, Request(bytes, b))).Code);
+        Assert.Equal("type_dependency_destination_conflict", Assert.Throws<OperationException>(() => ProgramImportPackaging.Build(bytes, b, Request(bytes, b))).Code);
         Assert.Contains(Build().Package.Manifest.NativeSteps, s => s.Contains("new UDT addition does not inherently require download", StringComparison.Ordinal));
     }
 
@@ -196,7 +198,7 @@ public sealed class ProgramImportPackageTests : IDisposable
         <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
           <xs:complexType name="TagType"><xs:sequence><xs:element name="Data" type="xs:anyType" minOccurs="0" maxOccurs="unbounded"/></xs:sequence><xs:attribute name="Name" type="xs:string" use="required"/><xs:attribute name="TagType" type="xs:string"/><xs:attribute name="DataType" type="xs:string"/><xs:attribute name="Dimensions" type="xs:string"/></xs:complexType>
           <xs:complexType name="TagsType"><xs:sequence><xs:element name="Tag" type="TagType" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType>
-          <xs:complexType name="TypesType"><xs:sequence><xs:element name="DataType" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence><xs:element name="Members" type="xs:anyType"/></xs:sequence><xs:attribute name="Name" type="xs:string" use="required"/></xs:complexType></xs:element></xs:sequence></xs:complexType>
+          <xs:complexType name="TypesType"><xs:sequence><xs:element name="DataType" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence><xs:element name="Members" type="xs:anyType"/></xs:sequence><xs:attribute name="Name" type="xs:string" use="required"/><xs:attribute name="Use" type="xs:string"/></xs:complexType></xs:element></xs:sequence></xs:complexType>
           <xs:complexType name="ProgramsType"><xs:sequence><xs:element name="Program" minOccurs="0" maxOccurs="unbounded"><xs:complexType><xs:sequence><xs:element name="Tags" type="TagsType"/><xs:element name="Routines" type="xs:anyType"/></xs:sequence><xs:attribute name="Name" type="xs:string" use="required"/><xs:attribute name="Use" type="xs:string"/><xs:attribute name="MainRoutineName" type="xs:string"/><xs:attribute name="TestEdits" type="xs:boolean"/></xs:complexType></xs:element></xs:sequence></xs:complexType>
           <xs:element name="RSLogix5000Content"><xs:complexType><xs:sequence><xs:element name="Controller"><xs:complexType><xs:sequence>
             <xs:element name="Modules" type="xs:anyType"/><xs:element name="DataTypes" type="TypesType"/><xs:element name="AddOnInstructionDefinitions" type="xs:anyType"/>
@@ -214,7 +216,7 @@ public sealed class ProgramImportPackageTests : IDisposable
         var partial = LogixImportSchema.Validate(partialDocument, schema, "partial_definitions");
         Assert.True(partial.Valid); Assert.False(partial.FullDocumentValidated); Assert.False(partial.NativeImportAccepted);
         Assert.Equal(before, partialDocument.ToString(SaveOptions.DisableFormatting));
-        Assert.Equal(["Program:App", "Tag:NewGlobal", "DataType:NewType"], partial.Definitions);
+        Assert.Equal(["Program:App", "Tag:NewGlobal", "DataType:Existing", "DataType:NewType"], partial.Definitions);
         Assert.Equal(hash, ProjectService.Hash(schema));
         var bad = XmlProjects.Parse(package.ProgramXml); Program(bad).SetAttributeValue("InventedAttribute", "invalid");
         Assert.False(LogixImportSchema.Validate(bad, schema, "partial_definitions").Valid);
@@ -240,6 +242,11 @@ public sealed class ProgramImportPackageTests : IDisposable
         var schema = Schema(); var schemaPath = Path.Combine(root, "fixture.xsd"); await File.WriteAllBytesAsync(schemaPath, schema);
         var request = Request(a, b) with { Source = new(p.Id, p.CurrentSha256), Baseline = new(q.Id, q.CurrentSha256), Schema = new(schemaPath, ProjectService.Hash(schema)) };
         var package = await service.PrepareProgramImportPackageAsync(request);
+        var dependencies = await service.PrepareTypeDependencyPackageAsync(new(request.Source, request.Baseline, "App", ["NewGlobal"]));
+        Assert.NotNull(dependencies.Types); Assert.True(dependencies.Closure.CompleteForDeclaredSourceGraph);
+        Assert.False(dependencies.Closure.NativePreconfigurationAccepted);
+        Assert.Equal(dependencies.Types.Sha256, ProjectService.Hash(File.ReadAllBytes(service.Download(dependencies.Types.Id).Path)));
+        Assert.Empty(service.SdkJobList());
         Assert.True(package.Plan.Schema.Valid); Assert.True(package.Plan.Schema.XsdApplied); Assert.False(package.Plan.Schema.FullDocumentValidated);
         var readback = await Register("readback", NativeStyleReadback(a, b));
         Assert.True(service.CheckProgramImportReadback(new(package.Manifest.Id, package.Manifest.Sha256, new(readback.Id, readback.CurrentSha256))).Matches);
