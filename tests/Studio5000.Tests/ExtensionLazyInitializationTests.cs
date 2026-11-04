@@ -112,8 +112,10 @@ public sealed class ExtensionLazyInitializationTests : IDisposable
     {
         Package("logix"); var candidate = new Worker { Block = true }; factory = _ => candidate;
         var pending = Catalog("logix"); await candidate.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        host.Dispose(); candidate.Finish.TrySetResult();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => pending); Assert.True(candidate.Disposed);
+        var disposal = Task.Run(host.Dispose);
+        try { await disposal.WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally { candidate.Finish.TrySetResult(); }
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => pending.WaitAsync(TimeSpan.FromSeconds(3))); Assert.True(candidate.Disposed);
         Assert.False(File.Exists(Path.Combine(options.StateDirectory, "extensions", "logix-1.sha256")));
     }
     [Fact]

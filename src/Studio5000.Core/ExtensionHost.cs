@@ -160,17 +160,23 @@ public sealed class ExtensionHost : IDisposable
             }
             var summary = new ExtensionSummary(id, version, Guid.NewGuid().ToString("N"), hash, operations, 0, "active", package.ParallelWorkers, package.ReleaseIdleWorkers);
             // Persist activation only after validation/health. Failure leaves the old generation selected.
+            bool closing, canceled;
             lock (sync)
             {
-                ObjectDisposedException.ThrowIf(disposed, this);
-                timeout.Token.ThrowIfCancellationRequested();
-                AtomicText(ledger, hash); Save(SafePath(root, id, "active.json"), new ExtensionPointer(version));
-                if (active.Remove(id, out var old))
-                { old.Retired = true; if (old.Leases == 0) DisposeWorker(old.Worker); else retired.Add(old); }
-                active.Add(id, new(summary, worker)); worker = null;
-                attempted.Add(id);
-                errors.RemoveAll(x => x.StartsWith(id + ":", StringComparison.Ordinal));
+                closing = disposed; canceled = timeout.IsCancellationRequested;
+                if (!closing && !canceled)
+                {
+                    AtomicText(ledger, hash); Save(SafePath(root, id, "active.json"), new ExtensionPointer(version));
+                    if (active.Remove(id, out var old))
+                    { old.Retired = true; if (old.Leases == 0) DisposeWorker(old.Worker); else retired.Add(old); }
+                    active.Add(id, new(summary, worker)); worker = null;
+                    attempted.Add(id);
+                    errors.RemoveAll(x => x.StartsWith(id + ":", StringComparison.Ordinal));
+                }
             }
+            // Propagate refusal only after releasing the activation monitor.
+            ObjectDisposedException.ThrowIf(closing, this);
+            if (canceled) timeout.Token.ThrowIfCancellationRequested();
             Audit("reload", id, summary.Generation, version); return summary;
         }
         catch (Exception ex) when (ex is IOException or JsonException or ArgumentException || ex is InvalidOperationException and not ObjectDisposedException)
