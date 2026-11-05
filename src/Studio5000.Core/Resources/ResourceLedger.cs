@@ -36,9 +36,22 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     internal Action? BeforeRecordsRead { get; set; }
     private static double Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d;
     private string RecordPath(string id) { ResourceRules.Token(id, 32); return Path.Combine(DirectoryPath, id + ".json"); }
+    private static string RetainedPath(string path) => Path.ChangeExtension(path, ".rockwell-closed");
     public ResourceRecord Get(string id)
     {
-        var path = RecordPath(id); ProjectService.RejectLinks(path);
+        var path = RecordPath(id);
+        try { return ReadRecord(path, id); }
+        catch (FileNotFoundException)
+        {
+            var record = ReadRecord(RetainedPath(path), id);
+            if (!ResourceOwner.RetainedFrontdoorShape(record))
+                throw new InvalidOperationException("Retained history must be an attested released Rockwell frontdoor observation.");
+            return record;
+        }
+    }
+    private static ResourceRecord ReadRecord(string path, string id)
+    {
+        ProjectService.RejectLinks(path);
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var bytes = new byte[32769]; var length = 0;
         while (length < bytes.Length && file.Read(bytes, length, bytes.Length - length) is var count && count != 0) length += count;
@@ -112,7 +125,9 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     {
         var bytes = ResourceJson.Write(record);
         if (bytes.Length > 32768) throw new ArgumentException("Resource record exceeds 32 KiB.");
-        var path = RecordPath(record.ResourceId); var temp = Path.Combine(DirectoryPath, ".resource-" + Guid.NewGuid().ToString("N"));
+        var path = RecordPath(record.ResourceId);
+        if (File.Exists(RetainedPath(path))) throw new InvalidOperationException("The resource identity belongs to retained history.");
+        var temp = Path.Combine(DirectoryPath, ".resource-" + Guid.NewGuid().ToString("N"));
         try
         {
             using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { output.Write(bytes); output.Flush(true); }
@@ -239,6 +254,8 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
         });
         internal const string FrontdoorAppId = "rockwell-mcp-frontdoor";
         internal const string FrontdoorLabel = "Rockwell MCP metadata frontdoor";
+        private const string FrontdoorDetached = "Actual transport owner detached its stateless metadata observation after closing its admission handles. No process termination or engineering-job completion is asserted.";
+        private const string FrontdoorDeparted = "Exact departed stateless frontdoor process generation independently verified. Observation only; no process action, native recovery or operation replay.";
         internal ResourceRecord AdmitFrontdoor(string[]? reviewedImages = null) => TryAdmitFrontdoor(reviewedImages)
             ?? throw new InvalidOperationException("Metadata frontdoor claim budget reached; retain unresolved evidence.");
         internal ResourceRecord? TryAdmitFrontdoor(string[]? reviewedImages = null) => ledger.Locked<ResourceRecord?>(() =>
@@ -263,18 +280,30 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
                 CreatedAt = Now, UpdatedAt = Now }.Normalize();
             ledger.Save(record); return record;
         });
-        private static bool FrontdoorShape(ResourceRecord record) =>
+        private static bool FrontdoorObservation(ResourceRecord record) =>
             record.AppId == FrontdoorAppId && record.Kind == "mcp-frontdoor" && record.Label == FrontdoorLabel &&
-            record.State == "active" && record.Ownership == "attached" && record.CleanupMode == "report" &&
+            record.Ownership == "attached" && record.CleanupMode == "report" &&
             record.Containment == "app_owned" && record.Process is null && record.Members.Length == 0 &&
-            record.Receipt is null && record.Reconciliation is null && record.RecoveryBarrier is null && record.BarrierResolution is null;
+            record.Receipt is null && record.RecoveryBarrier is null && record.BarrierResolution is null;
+        private static bool FrontdoorShape(ResourceRecord record) =>
+            FrontdoorObservation(record) && record.State == "active" && record.Reconciliation is null;
+        internal static bool RetainedFrontdoorShape(ResourceRecord record)
+        {
+            if (!FrontdoorObservation(record) || record.State != "released" || record.Reconciliation is not { } close) return false;
+            return close.Evidence switch
+            {
+                FrontdoorDetached => close.ActorOwnerId == record.OwnerId && close.Actor == record.Owner,
+                FrontdoorDeparted => close.Actor.HostId == record.Owner.HostId && close.Actor != record.Owner,
+                _ => false
+            };
+        }
         internal ResourceRecord CloseFrontdoor(string id, string revision) => ledger.Locked(() =>
         {
             var record = ledger.Get(id); Current(record);
             if (AppId != FrontdoorAppId || record.Revision != revision || !FrontdoorShape(record))
                 throw new InvalidOperationException("Frontdoor detach requires its unchanged, exact current observation.");
             return ledger.Replace(record with { State = "released", Reconciliation = new ResourceReconciliation(OwnerId, Identity, revision,
-                "Actual transport owner detached its stateless metadata observation after closing its admission handles. No process termination or engineering-job completion is asserted.", Now).Normalize() });
+                FrontdoorDetached, Now).Normalize() });
         });
         internal ResourceRecord? ReconcileExitedFrontdoor(string id, string revision, string reviewedImage) => ledger.Locked(() =>
         {
@@ -292,7 +321,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
                 (lockedRecords ?? ledger.Records()).Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
                     (other.Owner == record.Owner || other.Process == record.Owner || other.Members.Contains(record.Owner)))) return null;
             return ledger.Replace(record with { State = "released", Reconciliation = new ResourceReconciliation(OwnerId, Identity, revision,
-                "Exact departed stateless frontdoor process generation independently verified. Observation only; no process action, native recovery or operation replay.", Now).Normalize() });
+                FrontdoorDeparted, Now).Normalize() });
         }
         public ResourceRecord Reconcile(string id, string revision, string evidence) => ledger.Locked(() =>
         {

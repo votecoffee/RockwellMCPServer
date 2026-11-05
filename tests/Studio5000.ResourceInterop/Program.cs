@@ -46,6 +46,15 @@ if (args[0] == "fixtures")
     return;
 }
 if (!File.Exists(marker)) throw new ArgumentException("An explicit interop fixture marker is required; never use a live registry.");
+if (args[0] == "retained-frontdoor")
+{
+    var id = File.ReadAllText(Path.Combine(root, "retained-id.txt"));
+    var ledger = new ResourceLedger(Path.Combine(root, "registry"), new FakeDriver());
+    var record = ledger.Get(id);
+    Console.WriteLine(JsonSerializer.Serialize(new { resourceId = record.ResourceId, revision = record.Revision,
+        record = JsonDocument.Parse(ResourceJson.Write(record)).RootElement.Clone() }));
+    return;
+}
 if (args[0] == "bootstrap-service")
 {
     if (Path.GetFileName(Environment.ProcessPath) != "Studio5000.Service.exe") throw new ArgumentException("Use only the renamed harmless fixture apphost.");
