@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>RockwellMCPLauncher</AssemblyName>
+    <Title>RockwellMCPServer stable Windows launcher</Title>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Studio5000.Core/ParentProcessOwners.cs" Link="ParentProcessOwners.cs" />
+  </ItemGroup>
+</Project>

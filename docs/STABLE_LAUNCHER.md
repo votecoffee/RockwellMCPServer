@@ -13,6 +13,18 @@ The launcher reads `launcher/current.json`, verifies its selection checksum and 
 
 The snapshot contains the complete published MCP/stdio/Core dependency closure and a reviewed offline-service pin. It does not depend on a Codex cache or checkout launcher. It uses the explicit selected application root for existing settings, credentials, state and the ordinary shared service. Those files are referenced, never copied into a plugin/backend package or rewritten by publication. The static launcher starts the frontend; shared Core safely ensures the pinned offline service from the real long-lived stdio supervisor outside the MCP child's private kill job.
 
+## Optional Windows launcher
+
+`RockwellMCPLauncher.exe` is a .NET 8 Windows entrypoint for the existing stable state directory. It invokes the existing PowerShell verifier once and waits for it to exit. It then starts the selected `Studio5000.StdioHost.exe` with the inherited stdin, stdout and stderr handles. The selected host owns the MCP admission claim, bootstrap and shutdown. The entrypoint waits on the original host handle and watches its own client lifetime through the same parent ownership helper as the host. [Windows handle inheritance](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+
+Build the launcher into a staging directory from the repository root.
+
+```powershell
+dotnet publish src/Studio5000.StableLauncher/Studio5000.StableLauncher.csproj -c Release -o artifacts/launcher-stage
+```
+
+Review the `.exe`, `.dll`, `.deps.json` and `.runtimeconfig.json` as one payload. A staged binding places those files alongside `Start-Mcp.ps1` and `StableMcp.psm1`, sets `command` to the absolute `RockwellMCPLauncher.exe` path, uses an empty argument list, and retains the existing working directory and reviewed physical `ROCKWELL_RESOURCE_REGISTRY`. The same `launcher/current.json` and complete backend inventory apply. The publisher still manages immutable backend selection. Switching a saved binding is a separate reviewed handoff.
+
 ## Offline shared-service startup
 
 Generate the required hash-bound payload before creating the candidate inventory:
