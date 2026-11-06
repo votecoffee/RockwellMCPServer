@@ -315,13 +315,13 @@ sealed class OwnerStopService(string root, ResourceSupervisor resources, string 
             {
                 if (!projects.TryFenceShutdown()) return Task.FromResult(new OwnerShutdownDecision(false, "Finish active mutations, native jobs and polling before shutdown."));
                 if (!extensions.TryFenceShutdown()) { projects.ReleaseShutdownFence(); return Task.FromResult(new OwnerShutdownDecision(false, "Extension calls/reloads/jobs are still active.")); }
-                if (resources.ShutdownBlockers().Length != 0)
+                // Teardown exceptions propagate to the mailbox and preserve the admission fences.
+                if (!resources.TryCloseOwnedResources())
                 {
                     extensions.ReleaseShutdownFence(); projects.ReleaseShutdownFence();
                     return Task.FromResult(new OwnerShutdownDecision(false, "Native connections, dirty/unknown documents or shared leases require app-owned close/recovery before shutdown."));
                 }
-                try { resources.CloseOwnedResources(); return Task.FromResult(new OwnerShutdownDecision(true, "Owned resource cleanup verified; service shutdown requested.")); }
-                catch { /* Keep all admission fences after uncertain teardown. */ throw; }
+                return Task.FromResult(new OwnerShutdownDecision(true, "Owned resource cleanup verified; service shutdown requested."));
             }, stoppingToken)) { lifetime.StopApplication(); return; }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }

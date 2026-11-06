@@ -43,6 +43,29 @@ public sealed class ResourceLedgerTests : IDisposable
         return (ledger, owner, owner.BindProcess(intent.ResourceId, 100));
     }
     [Fact]
+    public void Shutdown_checks_one_snapshot_and_fences_only_after_blockers_are_cleared()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ledger = Ledger();
+        var owner = ledger.Owner("rockwell-fixture");
+        var attachment = owner.ActivateOpaqueAttachment(owner.BeginLaunch("Fixture native lease", ownership: "attached").ResourceId);
+        var scans = 0;
+        ledger.BeforeRecordsRead = () => scans++;
+
+        Assert.False(owner.TryFenceShutdown());
+        Assert.Equal(1, scans);
+        Assert.Equal(attachment.Revision, ledger.Get(attachment.ResourceId).Revision);
+        var admission = owner.BeginLaunch("Admission after refusal", ownership: "attached");
+        owner.ReleaseAttachment(admission.ResourceId);
+        owner.ReleaseAttachment(attachment.ResourceId);
+
+        scans = 0;
+        Assert.True(owner.TryFenceShutdown());
+        Assert.Equal(1, scans);
+        Assert.Throws<InvalidOperationException>(() => owner.BeginLaunch("Admission after fence"));
+    }
+
+    [Fact]
     public void Record_file_allows_the_exact_byte_limit_and_rejects_one_extra_byte()
     {
         if (!OperatingSystem.IsWindows()) return;

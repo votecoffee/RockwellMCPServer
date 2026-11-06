@@ -109,23 +109,27 @@ public sealed class ResourceSupervisor : IDisposable
     }
     public ResourceRecord[] ShutdownBlockers()
     {
-        lock (sync)
-            return Ledger.Records().Where(r => r.AppId == Owner.AppId && r.OwnerId == Owner.OwnerId && !r.Terminal &&
-                (r.RecoveryBarrier is not null || r.Receipt is not null || r.Ownership != "private" || r.CleanupMode != "terminate" || r.State != "active")).ToArray();
+        lock (sync) return Owner.ShutdownBlockers();
     }
     public void CloseOwnedResources()
     {
+        if (!TryCloseOwnedResources()) throw new OperationException("native_recovery_required", "Owned documents, attachments, shared leases or uncertain receipts require app-owned close/recovery before shutdown.");
+    }
+    public bool TryCloseOwnedResources()
+    {
         lock (sync)
         {
-            if (disposed) return;
-            if (ShutdownBlockers().Length != 0) throw new OperationException("native_recovery_required", "Owned documents, attachments, shared leases or uncertain receipts require app-owned close/recovery before shutdown.");
-            closing = true; Owner.FenceAndInspectClose();
+            if (disposed) return true;
+            if (!Owner.TryFenceShutdown()) return false;
+            closing = true;
+            // The owner fence is set under the ledger lock, which is released before child cleanup can wait.
             foreach (var child in children.Where(c => !c.HandlesClosed))
                 if (child.Close().Outcome == "uncertain") throw new OperationException("resource_cleanup_uncertain", "Resource cleanup is uncertain; keep admission fenced and inspect the retained receipt.");
             if (serviceReceiptPublished)
                 NativeLifecycleJournal.WriteAtomic(Path.Combine(Root, ".local", "service-owner-exit.json"),
                     JsonSerializer.SerializeToUtf8Bytes(new { schemaVersion = 1, ownerId = Owner.OwnerId, owner = Owner.Identity, state = "closed" }));
             children.Clear(); disposed = true; Interlocked.CompareExchange(ref current, null, this);
+            return true;
         }
     }
     public void Dispose() => CloseOwnedResources();

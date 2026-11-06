@@ -471,11 +471,24 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             }
             finally { handle?.Dispose(); }
         }
+        internal ResourceRecord[] ShutdownBlockers() => ledger.Records().Where(r => r.AppId == AppId && r.OwnerId == OwnerId && !r.Terminal &&
+            (r.RecoveryBarrier is not null || r.Receipt is not null || r.Ownership != "private" || r.CleanupMode != "terminate" || r.State != "active")).ToArray();
+        internal bool TryFenceShutdown() => ledger.Locked(() =>
+        {
+            RequireCurrentFenceOwner();
+            if (ShutdownBlockers().Length != 0) return false;
+            closing = true;
+            return true;
+        });
         public ResourceRecord[] FenceAndInspectClose() => ledger.Locked(() =>
         {
-            if (ledger.Driver.CurrentIdentity().Normalize() != Identity) throw new InvalidOperationException("Only the exact current owner may fence resource admission.");
+            RequireCurrentFenceOwner();
             closing = true;
             return ledger.Records().Where(r => r.AppId == AppId && r.OwnerId == OwnerId && r.Owner == Identity && !r.Terminal).ToArray();
         });
+        private void RequireCurrentFenceOwner()
+        {
+            if (ledger.Driver.CurrentIdentity().Normalize() != Identity) throw new InvalidOperationException("Only the exact current owner may fence resource admission.");
+        }
     }
 }
