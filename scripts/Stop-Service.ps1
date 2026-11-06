@@ -1,4 +1,5 @@
-param([switch]$ReviewBlockedStop)
+param([switch]$ReviewBlockedStop, [ValidatePattern('^[a-f0-9]{32}$')][string]$ObserveRequestId,
+    [ValidateRange(1,300)][int]$WaitSeconds = 20)
 $ErrorActionPreference = 'Stop'
 function Read-RockwellStopJson([string]$Path) {
     # Pollers must share delete as the owner atomically replaces its receipt.
@@ -36,14 +37,30 @@ function Publish-RockwellStopIntent([string]$Temporary, [string]$Target, [script
         }
     }
 }
+function Get-RockwellDirectStopSignature([string]$Key, [string]$OwnerId, [string]$RequestId) {
+    $body = @('rockwell-stop-v1', $OwnerId, $OwnerId, $RequestId) -join [char]10
+    $hmac = New-Object Security.Cryptography.HMACSHA256
+    try {
+        $hmac.Key = [Text.Encoding]::UTF8.GetBytes($Key)
+        return -join ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($body)) | ForEach-Object { $_.ToString('x2') })
+    } finally { $hmac.Dispose() }
+}
+function Read-RockwellDirectStopReply([string]$Path, [string]$OwnerId, [string]$RequestId) {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $reply = Read-RockwellStopJson $Path
+        if ($reply.schemaVersion -eq 1 -and $reply.ownerId -ceq $OwnerId -and $reply.requestId -ceq $RequestId) { return $reply }
+    }
+}
+if ($ObserveRequestId -and $ReviewBlockedStop) { throw 'Observation cannot request another stop review.' }
 $repo = Split-Path -Parent $PSScriptRoot
 $pidFile = Join-Path $repo '.local/service.pid'
-if (!(Test-Path -LiteralPath $pidFile)) { throw 'No background service PID file was found.' }
-$serviceProcessId = [int](Get-Content -LiteralPath $pidFile -Raw).Trim()
+$serviceProcessId = if (Test-Path -LiteralPath $pidFile) { [int](Get-Content -LiteralPath $pidFile -Raw).Trim() }
+elseif (!$ObserveRequestId) { throw 'No background service PID file was found.' }
 $supervisorFile = Join-Path $repo '.local/management-supervisor.json'
 if (Test-Path -LiteralPath $supervisorFile) {
     $owned = Read-RockwellStopJson $supervisorFile
     if ($owned.schemaVersion -eq 2) {
+        if ($ObserveRequestId -or $PSBoundParameters.ContainsKey('WaitSeconds')) { throw 'These observation options require a direct service owner.' }
         if ($owned.servicePid -ne $serviceProcessId -or $owned.ownerId -notmatch '^[0-9a-f]{32}$' -or
             $owned.resourceId -notmatch '^[0-9a-f]{32}$' -or !$owned.resourceRegistry) { throw 'Managed ownership receipt differs; no stop was requested.' }
         $resourcePath = Join-Path ([IO.Path]::GetFullPath($owned.resourceRegistry)) ('resources/' + $owned.resourceId + '.json')
@@ -118,53 +135,107 @@ if (Test-Path -LiteralPath $supervisorFile) {
 $ownerPath = Join-Path $repo '.local/service-owner.json'
 if (!(Test-Path -LiteralPath $ownerPath)) { throw 'No creation-bound service ownership receipt exists. Do not terminate from this legacy PID file; inspect the old instance manually.' }
 $direct = Read-RockwellStopJson $ownerPath
-if ($direct.schemaVersion -ne 1 -or $direct.ownerId -notmatch '^[0-9a-f]{32}$' -or $direct.owner.pid -ne $serviceProcessId) { throw 'Direct service ownership generation differs; no stop requested.' }
+if ($direct.schemaVersion -ne 1 -or $direct.ownerId -cnotmatch '^[0-9a-f]{32}$' -or $direct.owner.pid -le 0 -or
+    ($null -ne $serviceProcessId -and $direct.owner.pid -ne $serviceProcessId) -or $direct.owner.created -notmatch '^[0-9]{1,24}$') {
+    throw 'Direct service ownership generation differs; no stop requested.'
+}
+$serviceProcessId = $direct.owner.pid
+$expected = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/app/Service/Studio5000.Service.exe'))
+if (![IO.Path]::GetFullPath($direct.owner.executable).Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Direct service ownership image differs; no stop requested.'
+}
 $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
 try { $cryptoKey = $baseKey.OpenSubKey('SOFTWARE\Microsoft\Cryptography'); try { $machine = ([Guid]::Parse([string]$cryptoKey.GetValue('MachineGuid'))).ToString('D').ToLowerInvariant() } finally { if ($cryptoKey) { $cryptoKey.Dispose() } } } finally { $baseKey.Dispose() }
 $sha = [Security.Cryptography.SHA256]::Create()
 try { $hostId = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($machine)) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
 if ($direct.owner.host_id -cne $hostId) { throw 'Foreign/unverifiable service ownership host; no local PID lookup is permitted.' }
-$process = Get-Process -Id $serviceProcessId -ErrorAction SilentlyContinue
-if (!$process) { throw 'Recorded service is gone; inspect retained resource outcomes instead of replaying stop.' }
+$requestPath = Join-Path $repo '.local/service-owner-stop.json'
+$replyPath = Join-Path $repo '.local/service-owner-stop-result.json'
+if ($ObserveRequestId) {
+    $prior = if (Test-Path -LiteralPath $requestPath) { Read-RockwellStopJson $requestPath }
+    if ($prior.ownerId -cne $direct.ownerId -or $prior.requestId -cne $ObserveRequestId) {
+        throw 'The retained stop request does not match the requested ID and exact owner.'
+    }
+}
+$process = $null
 try {
-    [void]$process.Handle
-    $expected = [IO.Path]::GetFullPath((Join-Path $repo 'artifacts/app/Service/Studio5000.Service.exe'))
-    if ($process.HasExited -or !$process.Path -or !([IO.Path]::GetFullPath($process.Path).Equals($expected, [StringComparison]::OrdinalIgnoreCase)) -or
-        !([IO.Path]::GetFullPath($direct.owner.executable).Equals($expected, [StringComparison]::OrdinalIgnoreCase)) -or
-        $process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString([Globalization.CultureInfo]::InvariantCulture) -cne [string]$direct.owner.created) { throw 'Direct service process identity changed; no stop requested.' }
-    $requestPath = Join-Path $repo '.local/service-owner-stop.json'; $replyPath = Join-Path $repo '.local/service-owner-stop-result.json'
-    $requestId = [Guid]::NewGuid().ToString('N')
-    if (Test-Path -LiteralPath $requestPath) {
-        $prior = Read-RockwellStopJson $requestPath
-        if ($prior.ownerId -eq $direct.ownerId) {
+    try { $process = Get-Process -Id $serviceProcessId -ErrorAction Stop }
+    catch { if ($_.FullyQualifiedErrorId -notlike 'NoProcessFoundForGivenId,*') { throw } }
+    if ($process) {
+        [void]$process.Handle
+        if (!$process.Path -or !([IO.Path]::GetFullPath($process.Path).Equals($expected, [StringComparison]::OrdinalIgnoreCase)) -or
+            $process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString([Globalization.CultureInfo]::InvariantCulture) -cne [string]$direct.owner.created) {
+            throw 'Direct service process identity changed; no stop requested.'
+        }
+    }
+
+    $publishLock = $null
+    try {
+        if (!$ObserveRequestId -and $process -and !$process.HasExited) {
+            $publishLock = [IO.File]::Open((Join-Path $repo '.local/service-owner-stop-publish.lock'),
+                [IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        }
+        if (!$ObserveRequestId) { $prior = if (Test-Path -LiteralPath $requestPath) { Read-RockwellStopJson $requestPath } }
+        $sameOwner = $prior -and $prior.ownerId -ceq $direct.ownerId
+        if (!$sameOwner -and !$publishLock) { throw 'No retained stop request for the exact service owner.' }
+        $key = [IO.File]::ReadAllText((Join-Path $repo '.local/service.key')).TrimStart([char]0xfeff).Trim()
+        if ($key.Length -lt 32 -or $key.Length -gt 4096) { throw 'Private stop authentication is unavailable.' }
+        $priorReply = $null
+        if ($sameOwner) {
             $requestId = $prior.requestId
-            if (Test-Path -LiteralPath $replyPath) {
-                $reply = Read-RockwellStopJson $replyPath
-                if ($reply.ownerId -eq $direct.ownerId -and $reply.requestId -eq $requestId -and $reply.state -eq 'blocked' -and $ReviewBlockedStop) { $requestId = [Guid]::NewGuid().ToString('N') }
-                elseif ($reply.ownerId -eq $direct.ownerId -and $reply.requestId -eq $requestId -and $reply.state -in @('blocked','uncertain','completed')) { throw ('Prior stop '+$reply.state+'; inspect its outcome. Use -ReviewBlockedStop only after a verified zero-effect refusal is resolved.') }
+            if ($prior.schemaVersion -ne 1 -or $prior.resourceId -cne $direct.ownerId -or $requestId -cnotmatch '^[0-9a-f]{32}$' -or
+                $prior.signature -cne (Get-RockwellDirectStopSignature $key $direct.ownerId $requestId)) {
+                throw 'Retained stop request authentication differs; preserve it for inspection.'
             }
+            $priorReply = Read-RockwellDirectStopReply $replyPath $direct.ownerId $requestId
+        }
+        if ($ReviewBlockedStop -and $priorReply.state -ne 'blocked') { throw 'A new review requires the matching verified blocked receipt.' }
+        if (!$sameOwner -or $ReviewBlockedStop) {
+            if (!$publishLock -or $process.HasExited) { throw 'The exact service owner is gone; no stop was requested.' }
+            $requestId = [Guid]::NewGuid().ToString('N')
+            $value = [ordered]@{ schemaVersion=1; ownerId=$direct.ownerId; resourceId=$direct.ownerId; requestId=$requestId;
+                signature=(Get-RockwellDirectStopSignature $key $direct.ownerId $requestId) }
+            $temporary = $requestPath + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+            try {
+                [IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+                if ($prior) {
+                    $before = Read-RockwellStopJson $requestPath
+                    if ($before.ownerId -cne $prior.ownerId -or $before.requestId -cne $prior.requestId -or $before.signature -cne $prior.signature) {
+                        throw 'The retained stop request changed during review.'
+                    }
+                    Publish-RockwellStopIntent $temporary $requestPath
+                } else { [IO.File]::Move($temporary,$requestPath) }
+            } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+        } elseif (!$ObserveRequestId -and $priorReply.state -in @('blocked','uncertain')) {
+            throw ('Prior stop '+$priorReply.state+'; inspect its outcome. Use -ReviewBlockedStop only after a verified zero-effect refusal is resolved.')
+        }
+    } finally { if ($publishLock) { $publishLock.Dispose() } }
+
+    $wait = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $exited = !$process -or $process.WaitForExit(100)
+        $reply = Read-RockwellDirectStopReply $replyPath $direct.ownerId $requestId
+        if ($reply.state -in @('blocked','uncertain')) { throw ('Direct service stop '+$reply.state+': '+$reply.message) }
+        if ($exited) {
+            $exitPath = Join-Path $repo '.local/service-owner-exit.json'
+            $closed = if (Test-Path -LiteralPath $exitPath) { Read-RockwellStopJson $exitPath }
+            if ($reply.state -ne 'completed' -or $closed.schemaVersion -ne 1 -or $closed.state -cne 'closed' -or $closed.ownerId -cne $direct.ownerId -or
+                $closed.owner.host_id -cne $direct.owner.host_id -or $closed.owner.pid -ne $direct.owner.pid -or
+                $closed.owner.created -cne $direct.owner.created -or $closed.owner.executable -ine $direct.owner.executable) {
+                throw 'Service exit lacks matching verified shutdown evidence.'
+            }
+            Write-Output "Direct service owner confirmed cleanup and shutdown. Request $requestId, owner $($direct.ownerId)."
+            return
+        }
+        if ($wait.Elapsed.TotalSeconds -ge $WaitSeconds) {
+            $state = switch ($reply.state) {
+                'reviewing' { 'owner reviewing' }
+                'completed' { 'waiting for the original process to exit' }
+                default { 'awaiting owner receipt' }
+            }
+            Write-Output "Direct service stop is still pending ($state). Request $requestId, owner $($direct.ownerId), PID $serviceProcessId, created $($direct.owner.created)."
+            Write-Output "Resume observation with .\scripts\Stop-Service.ps1 -ObserveRequestId $requestId."
+            exit 2
         }
     }
-    if ($requestId -notmatch '^[0-9a-f]{32}$') { throw 'Retained stop request identity is invalid.' }
-    $key = [IO.File]::ReadAllText((Join-Path $repo '.local/service.key')).TrimStart([char]0xfeff).Trim()
-    if ($key.Length -lt 32 -or $key.Length -gt 4096) { throw 'Private stop authentication is unavailable.' }
-    $body = "rockwell-stop-v1`n$($direct.ownerId)`n$($direct.ownerId)`n$requestId"
-    $hmac = New-Object Security.Cryptography.HMACSHA256
-    try { $hmac.Key = [Text.Encoding]::UTF8.GetBytes($key); $signature = -join ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($body)) | ForEach-Object { $_.ToString('x2') }) } finally { $hmac.Dispose() }
-    $value = [ordered]@{ schemaVersion=1; ownerId=$direct.ownerId; resourceId=$direct.ownerId; requestId=$requestId; signature=$signature }
-    $temporary = $requestPath + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
-    try { [IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false))); Publish-RockwellStopIntent $temporary $requestPath }
-    finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
-    while (!$process.WaitForExit(100)) {
-        if (Test-Path -LiteralPath $replyPath) {
-            $reply = Read-RockwellStopJson $replyPath
-            if ($reply.ownerId -eq $direct.ownerId -and $reply.requestId -eq $requestId -and $reply.state -in @('blocked','uncertain')) { throw ('Direct service stop '+$reply.state+': '+$reply.message) }
-        }
-        if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Direct stop outcome is not confirmed; inspect the same intent instead of creating another request.' }
-    }
-    if (!(Test-Path -LiteralPath $replyPath)) { throw 'Service exited without an owned shutdown receipt; retain the uncertain outcome.' }
-    $reply = Read-RockwellStopJson $replyPath
-    if ($reply.ownerId -ne $direct.ownerId -or $reply.requestId -ne $requestId -or $reply.state -ne 'completed') { throw 'Service exit lacks matching verified shutdown evidence.' }
-    Write-Output 'Direct service owner confirmed cleanup and shutdown.'
-} finally { $process.Dispose() }
+} finally { if ($process) { $process.Dispose() } }

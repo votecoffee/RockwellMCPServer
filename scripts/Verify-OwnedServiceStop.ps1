@@ -62,7 +62,7 @@ try {
     try { $hostId = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($machine)) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
     $owner = [pscustomobject]@{ schemaVersion=1; ownerId=('a'*32); owner=[pscustomobject]@{ host_id=$hostId; pid=424242; executable=$image; created=$started.ToFileTimeUtc().ToString([Globalization.CultureInfo]::InvariantCulture) } }
     $owner | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $local 'service-owner.json') -Encoding UTF8
-    [pscustomobject]@{ schemaVersion=1; ownerId=('a'*32); resourceId=('a'*32); requestId=('c'*32); signature=('0'*64) } |
+    [pscustomobject]@{ schemaVersion=1; ownerId=('a'*32); resourceId=('a'*32); requestId=('c'*32); signature='ac31de94a03d3df4eae4ed4c27d545ceff8bd002f06c636581ab09ef66b4b8d5' } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $local 'service-owner-stop.json') -Encoding UTF8
     $process | Add-Member ScriptMethod WaitForExit {
         param($milliseconds)
@@ -74,6 +74,9 @@ try {
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixtureLocal 'service-owner-stop-result.json') -Encoding UTF8
         return $false
     } -Force
+    $intentPath = Join-Path $local 'service-owner-stop.json'
+    $originalIntent = [IO.File]::ReadAllText($intentPath)
+    $originalWriteTime = [IO.File]::GetLastWriteTimeUtc($intentPath)
     try { & $scriptPath; throw 'Dirty native refusal was ignored.' }
     catch { if ($_.Exception.Message -notmatch 'Direct service stop blocked') { throw } }
     $checks++
@@ -81,6 +84,9 @@ try {
     try { & $scriptPath; throw 'A blocked stop was automatically retried.' }
     catch { if ($_.Exception.Message -notmatch 'Prior stop blocked') { throw } }
     if ($global:RockwellOwnedStopFixture.Waits -ne $waits) { throw 'A blocked request reached dispatch twice.' }
+    if ([IO.File]::ReadAllText($intentPath) -cne $originalIntent -or [IO.File]::GetLastWriteTimeUtc($intentPath) -ne $originalWriteTime) {
+        throw 'Observing the retained direct request rewrote it.'
+    }
     $checks++
     $owner.owner.host_id = '0'*64
     $owner | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $local 'service-owner.json') -Encoding UTF8
