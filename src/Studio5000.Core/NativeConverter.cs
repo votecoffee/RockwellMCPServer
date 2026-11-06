@@ -22,29 +22,30 @@ public sealed partial class NativeConverter(ServiceOptions options, SdkServiceCo
         using var doc = JsonDocument.Parse(await output); return doc.RootElement.Clone();
     }
 
-    private ProcessStartInfo Start()
+    private ProcessStartInfo Start(string? executionProfile = null)
     {
         NativeExecutionPolicy.ValidateOptions(options);
         var start = new ProcessStartInfo(Path.GetFullPath(options.NativeBridgePath!))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        start.Environment[NativeExecutionPolicy.EnvironmentKey] = options.NativeExecutionProfile;
+        start.Environment[NativeExecutionPolicy.EnvironmentKey] = executionProfile ?? options.NativeExecutionProfile;
         return start;
     }
 
     public async Task<SdkBridgeResult> ExecuteSdkAsync(SdkBridgeRequest request, CancellationToken ct)
     {
         NativeExecutionPolicy.ValidateOptions(options);
-        NativeExecutionPolicy.ValidateCalls(options.NativeExecutionProfile, request.Calls, request.CommunicationsPath);
-        request = request with { ExecutionProfile = options.NativeExecutionProfile };
+        var profile = request.BoundL5k ? NativeExecutionPolicy.LocalProject : options.NativeExecutionProfile;
+        NativeExecutionPolicy.ValidateCalls(profile, request.Calls, request.CommunicationsPath);
+        request = request with { ExecutionProfile = profile };
         if (!Available) throw new OperationException("native_unavailable", "Build and configure the installed SDK native bridge.");
         await gate.WaitAsync(ct);
         try
         {
             ct.ThrowIfCancellationRequested();
             ResourceSupervisor.RequireCurrent().CheckWorkerAdmission();
-            await sdkService.EnsureForSdkAsync(ct);
+            if (!request.BoundL5k) await sdkService.EnsureForSdkAsync(ct);
             var resultPath = Path.Combine(request.WorkDirectory, "result.json");
-            var start = Start(); start.ArgumentList.Add("--sdk"); start.ArgumentList.Add(resultPath);
+            var start = Start(profile); start.ArgumentList.Add("--sdk"); start.ArgumentList.Add(resultPath);
             using var worker = ResourceSupervisor.RequireCurrent().LaunchNative(start, "Rockwell SDK operation session");
             var process = worker.Process;
             // Password arguments travel only over stdin. No raw request, stdout or stderr is persisted.

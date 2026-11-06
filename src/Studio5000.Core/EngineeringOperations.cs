@@ -124,6 +124,9 @@ public static class EngineeringOperations
         add("POST", "/api/sdk/jobs", (ProjectService service, SdkRunRequest request, CancellationToken ct) => service.StartSdkJobAsync(request, ct));
         add("GET", "/api/sdk/jobs/{id}", (ProjectService service, string id) => service.SdkJob(id));
         add("POST", "/api/sdk/jobs/{id}/cancel", (ProjectService service, string id) => service.CancelSdkJob(id));
+        add("POST", "/api/bound-l5k/plan", (ProjectService service, BoundL5kPlanRequest request, CancellationToken ct) => service.PlanBoundL5kAsync(request, ct));
+        add("POST", "/api/bound-l5k/preview", (ProjectService service, BoundL5kReviewRequest request, CancellationToken ct) => service.PreviewBoundL5kAsync(request, ct));
+        add("POST", "/api/bound-l5k/record", (ProjectService service, BoundL5kRecordRequest request, CancellationToken ct) => service.RecordBoundL5kAsync(request, ct));
         add("GET", "/api/watches", (ProjectService service) => service.WatchLists());
         add("POST", "/api/projects/{id}/cip-watch-plan", (ProjectService service, string id, CipWatchPlanRequest request) => service.PlanCipWatch(id, request));
         add("POST", "/api/watches/preflight", (ProjectService service, WatchPreflightRequest request, CancellationToken ct) => service.PreflightWatchAsync(request, ct));

@@ -71,6 +71,7 @@ internal static partial class SdkRunner
         SdkCatalog.ValidateCalls(request.Calls);
         NativeExecutionPolicy.ValidateWorkerProfile(request.ExecutionProfile, Environment.GetEnvironmentVariable(NativeExecutionPolicy.EnvironmentKey));
         NativeExecutionPolicy.ValidateCalls(request.ExecutionProfile, request.Calls, request.CommunicationsPath);
+        if (request.BoundL5k) BoundL5kExport.ValidateWorkerRequest(request);
         using var lifecycle = NativeLifecycleJournal.FromEnvironment();
         var secrets = request.Calls.SelectMany(c => c.Arguments).Where(p => SdkCatalog.IsSecret(p.Key))
             .Select(p => p.Value.GetString()).Where(s => !string.IsNullOrEmpty(s)).Cast<string>().Distinct().OrderByDescending(s => s.Length).ToArray();
@@ -105,6 +106,7 @@ internal static partial class SdkRunner
                     else
                     {
                         if (!SdkCatalog.Find(call.Method).IsStatic && project is null) throw new ArgumentException("This method requires a source project or a preceding project factory.");
+                        if (request.BoundL5k) await RequireLocalOfflineAsync(project!, request.ExecutionProfile);
                         lifecycle?.BeforeStep(i, call.Method);
                         value = await InvokeAsync(project, call.Method, call.Arguments, CancellationToken.None);
                     }
@@ -122,12 +124,15 @@ internal static partial class SdkRunner
             }
             if (project is not null)
             {
-                lifecycle?.BeforeStep(request.Calls.Length, "PreserveWorkingCopyAndDisconnect");
+                lifecycle?.BeforeStep(request.Calls.Length, request.BoundL5k ? "VerifyOfflineExportClose" : "PreserveWorkingCopyAndDisconnect");
                 await RequireLocalOfflineAsync(project, request.ExecutionProfile);
-                if (await project.ReadConnectedStateAsync() is LogixProject.ConnectedState.Online or LogixProject.ConnectedState.Connected)
-                    await project.GoOfflineAsync();
-                await project.SaveAsAsync(Path.Combine(request.WorkDirectory, "final.acd"));
-                await project.SaveAsAsync(Path.Combine(request.WorkDirectory, "final.l5x"));
+                if (!request.BoundL5k)
+                {
+                    if (await project.ReadConnectedStateAsync() is LogixProject.ConnectedState.Online or LogixProject.ConnectedState.Connected)
+                        await project.GoOfflineAsync();
+                    await project.SaveAsAsync(Path.Combine(request.WorkDirectory, "final.acd"));
+                    await project.SaveAsAsync(Path.Combine(request.WorkDirectory, "final.l5x"));
+                }
                 lifecycle?.AfterStep();
             }
             result = new("succeeded", steps.ToArray(), events.ToArray());
@@ -137,7 +142,7 @@ internal static partial class SdkRunner
             result = new("failed", steps.ToArray(), events.ToArray(), Redact(ex.Message));
             // Save only a separate private recovery copy. This preserves dirty
             // work without clearing the failed call's unknown external effects.
-            if (project is not null)
+            if (project is not null && !request.BoundL5k)
             {
                 try
                 {
@@ -158,6 +163,7 @@ internal static partial class SdkRunner
             }
         }
         lifecycle?.Complete(result.Status == "succeeded", result.Status == "succeeded", true);
+        if (request.BoundL5k) result = result with { SdkAssembly = typeof(LogixProject).Assembly.FullName };
         await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(result, Json));
         return 0; // Domain failures are represented by the result, not a lost process response.
     }

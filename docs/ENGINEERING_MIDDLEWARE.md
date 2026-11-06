@@ -1,9 +1,9 @@
 # On-demand Rockwell engineering
 
-Rockwell Engineering CLI 2.0.0 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
+Rockwell Engineering CLI 2.1.0 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
 
 ~~~powershell
-$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.0.0'
+$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.1.0'
 .\scripts\Publish-EngineeringMiddleware.ps1 -Destination $deploy
 $cli = Join-Path $deploy 'cli\Rockwell.EngineeringCli.exe'
 $l5x = (Resolve-Path -LiteralPath '.\examples\Demo.L5X').Path
@@ -31,7 +31,7 @@ Independent jobs use distinct working directories and receipts. Help, operations
 
 ## Discover and run engineering operations
 
-Use `operations` to enumerate names and `operation-help <name>` for the typed argument schema. Version 2.0.0 exposes 168 of 169 historical operation names and 162 direct engineering routes. These are two ways to address overlapping functionality. Direct names include the verb and route template, such as `GET /api/projects/{id}/elements`. Pass route/query fields as arguments and a POST body as the `request` argument when the schema lists it.
+Use `operations` to enumerate names and `operation-help <name>` for the typed argument schema. The catalog lists named operations and direct engineering routes. These are two ways to address overlapping functionality. Direct names include the verb and route template, such as `GET /api/projects/{id}/elements`. Pass route/query fields as arguments and a POST body as the `request` argument when the schema lists it.
 
 ~~~powershell
 & $cli operations
@@ -61,6 +61,8 @@ For controller operations, first configure the intended target in `%LOCALAPPDATA
 To poll, create or bind a stopped watch first. Run `studio_watch_start` in a native-enabled batch, wait for a bounded interval, and query the watch, recording or trigger results in later steps. The command stops its watches before exiting and writes stop receipts. Configure recording if samples must be available after the batch. Start the installed SDK service manually or use `studio_sdk_service_ensure_running` with an explicit authorized request ID and workspace recovery enabled. The command can start a stopped service and observe startup. The service is Windows-owned and startup is never automatic in this CLI.
 
 Native dispatch retains a workspace marker and, for an explicitly configured online target, a communications-path marker. The parent clears its markers after verified worker cleanup and recorded native close. If either receipt is missing, preserve the original state and inspect the linked job and affected target before allowing new native work. Windows process cleanup does not establish controller effects.
+
+For a same-snapshot native L5K and GM `derived_input`, use the [bound L5K workflow](BOUND_L5K.md). Plan, review and record are saved-file operations. Only the reviewed SDK job needs native permission.
 
 ## Review and publish a saved L5X copy
 

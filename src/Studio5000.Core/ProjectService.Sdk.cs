@@ -61,6 +61,7 @@ public sealed partial class ProjectService
     public async Task<SdkJob> StartSdkJobAsync(SdkRunRequest request, CancellationToken ct = default)
     {
         SdkCatalog.ValidateCalls(request.Calls);
+        var boundL5k = BoundL5kExport.ValidateRequest(request);
         NativeExecutionPolicy.ValidateOptions(options);
         NativeExecutionPolicy.ValidateCalls(options.NativeExecutionProfile, request.Calls, controllerTargetId: request.ControllerTargetId);
         if (!native.Available) throw new OperationException("native_unavailable", "Build and configure NativeBridgePath before submitting SDK jobs.");
@@ -101,6 +102,7 @@ public sealed partial class ProjectService
                 if (extension is not (".acd" or ".l5x" or ".l5k")) throw new OperationException("sdk_source_invalid", "SDK source must be ACD, L5X or L5K.");
                 source = Path.Combine(work, "input" + extension);
                 hash = await SnapshotSdkFileAsync(input, source, request.ExpectedSha256, ct);
+                if (boundL5k?.Format == "l5x") BoundL5kExport.ReadFullController(source, boundL5k.MajorRevision);
             }
             var inputs = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var file in request.InputFiles ?? [])
@@ -154,7 +156,8 @@ public sealed partial class ProjectService
                 }
             }
             SdkCatalog.ValidateCalls(calls);
-            var job = new SdkJob(id, "queued", DateTimeOffset.UtcNow, calls.Select(c => c.Method).ToArray(), hash, target?.Id, controller, [], [], []);
+            var job = new SdkJob(id, "queued", DateTimeOffset.UtcNow, calls.Select(c => c.Method).ToArray(), hash, target?.Id, controller, [], [], [],
+                BoundL5kSource: boundL5k);
             Save(SdkJobPath(id), job);
             var cancel = new CancellationTokenSource();
             var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -162,7 +165,7 @@ public sealed partial class ProjectService
             var task = Task.Run(async () =>
             {
                 await ready.Task;
-                try { await RunSdkJobAsync(job, new(work, source, target?.CommunicationsPath, calls), outputs, cancel.Token); }
+                try { await RunSdkJobAsync(job, new(work, source, target?.CommunicationsPath, calls, BoundL5k: boundL5k is not null), outputs, cancel.Token); }
                 finally { lock (sdkJobLock) { sdkJobs.TryRemove(id, out _); cancel.Dispose(); } }
             });
             lock (sdkJobLock) sdkJobs[id] = (cancel, task);
@@ -193,7 +196,7 @@ public sealed partial class ProjectService
         try
         {
             var result = SdkDiagnostics.Describe(await native.ExecuteSdkAsync(request, ct));
-            job = job with { Status = result.Status, Steps = result.Steps, Events = result.Events, Error = result.Error };
+            job = job with { Status = result.Status, Steps = result.Steps, Events = result.Events, Error = result.Error, SdkAssembly = result.SdkAssembly };
             if (result.Status == "succeeded")
             {
                 var l5x = Path.Combine(request.WorkDirectory, "final.l5x");

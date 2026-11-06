@@ -105,6 +105,9 @@ public sealed class LogixExtension : ProxyExtension
         Get("studio_sdk_get_job", "Read SDK job results and native evidence.", a => "/api/sdk/jobs/" + E(a, "jobId"), F<string>("jobId"));
         Get("studio_sdk_list_jobs", "List the latest SDK jobs.", _ => "/api/sdk/jobs");
         EmptyPost("studio_sdk_cancel_job", "control", "Request SDK cancellation; this does not roll back completed controller actions.", a => $"/api/sdk/jobs/{E(a, "jobId")}/cancel", F<string>("jobId"));
+        Post<BoundL5kPlanRequest>("studio_bound_l5k_plan", "read", "Hash an exact saved ACD or full controller L5X and prepare the version-pinned offline SDK SaveAs pair. Does not start the SDK.", _ => "/api/bound-l5k/plan");
+        Post<BoundL5kReviewRequest>("studio_bound_l5k_preview", "read", "Verify a completed offline export pair and review equivalence and annotations for the exact selected L5X. Does not start or retry the SDK.", _ => "/api/bound-l5k/preview");
+        Post<BoundL5kRecordRequest>("studio_bound_l5k_record", "apply", "Retain exact reviewed L5K evidence. A passing review emits a GM derived_input block with the two absolute paths, hashes and JSON pointers.", _ => "/api/bound-l5k/record");
     }
 }
 public sealed class FactoryTalkExtension : ProxyExtension
