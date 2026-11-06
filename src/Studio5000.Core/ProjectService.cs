@@ -8,7 +8,7 @@ using L5xploderLib.Services;
 
 namespace Studio5000.Core;
 
-// The only owner of project mutations. REST, MCP and the desktop UI share this instance through HTTP.
+// The only owner of project mutations. Each host supplies its own workspace state.
 public sealed partial class ProjectService : IDisposable
 {
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true, MaxDepth = 128 };
@@ -26,7 +26,8 @@ public sealed partial class ProjectService : IDisposable
     private static readonly ReaderWriterLockSlim[] stateFileGates = Enumerable.Range(0, 128).Select(_ => new ReaderWriterLockSlim()).ToArray();
     private static ReaderWriterLockSlim StateFileGate(string path) => stateFileGates[(int)((uint)StringComparer.OrdinalIgnoreCase.GetHashCode(Path.GetFullPath(path)) % (uint)stateFileGates.Length)];
 
-    public ProjectService(ServiceOptions options, IWatchSessionFactory? watchFactory = null, ISdkServiceDriver? sdkServiceDriver = null, Func<bool>? sdkServiceMaintenanceHeld = null)
+    public ProjectService(ServiceOptions options, IWatchSessionFactory? watchFactory = null, ISdkServiceDriver? sdkServiceDriver = null,
+        Func<bool>? sdkServiceMaintenanceHeld = null, string? sdkServiceReceiptDirectory = null)
     {
         this.options = options;
         NativeExecutionPolicy.ValidateOptions(options);
@@ -49,7 +50,7 @@ public sealed partial class ProjectService : IDisposable
         instanceLock = new FileStream(Path.Combine(state, "service.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         Directory.CreateDirectory(Path.Combine(state, "projects"));
         Directory.CreateDirectory(Path.Combine(state, "artifacts"));
-        sdkService = new(options, Path.Combine(state, "sdk-service-control"), sdkServiceDriver ?? new WindowsSdkServiceDriver(),
+        sdkService = new(options, sdkServiceReceiptDirectory ?? Path.Combine(state, "sdk-service-control"), sdkServiceDriver ?? new WindowsSdkServiceDriver(),
             sdkServiceMaintenanceHeld ?? (() => File.Exists(Path.Combine(Resources.ResourceSupervisor.IsInitialized ? Resources.ResourceSupervisor.RequireCurrent().Root : Directory.GetCurrentDirectory(), ".local", "maintenance-hold.json"))));
         native = new(options, sdkService);
         this.watchFactory = watchFactory ?? new WatchBackendRouter(native, new CipWatchSessionFactory(options));

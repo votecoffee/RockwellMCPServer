@@ -14,9 +14,9 @@ internal sealed record CliRequest(string Operation, string Input, int TimeoutSec
 
 internal static class EngineeringCli
 {
-    internal const string Version = "1.1.0";
+    internal const string Version = "2.0.0";
     internal const string JobEnvironment = "ROCKWELL_ENGINEERING_OWNED_JOB";
-    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { MaxDepth = 128 };
     internal static readonly JsonSerializerOptions StrictJson = new(Json)
     { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
     internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RockwellEngineering");
@@ -38,10 +38,12 @@ internal static class EngineeringCli
                   sdk-offline --request <absolute JSON path> [--timeout-seconds 1..300]
                   sdk-catalog
                   operations
+                  operation-help <name>
+                  run --request <absolute JSON path> [--timeout-seconds 1..300]
                   --version
 
                 Job commands emit one JSON result. Timeout defaults to 30 seconds.
-                SDK execution requires a separately reviewed local native pilot.
+                Use operation-help run for the workspace request format and native opt-in.
                 """);
             return 0;
         }
@@ -56,7 +58,9 @@ internal static class EngineeringCli
                 new { name = "sdk-read-export-plan", input = "--request", mode = "offline-review" },
                 new { name = "sdk-read-export", input = "--request", mode = "native-pilot-required" },
                 new { name = "sdk-offline", input = "--request", mode = "native-pilot-required" },
-                new { name = "sdk-catalog", input = "", mode = "static-metadata" } } });
+                new { name = "sdk-catalog", input = "", mode = "static-metadata" },
+                new { name = "run", input = "--request", mode = "workspace-operation" } },
+                workspaceOperations = LocalOperations.Catalog() });
             return 0;
         }
         if (args is ["sdk-catalog"])
@@ -67,6 +71,11 @@ internal static class EngineeringCli
         }
         try
         {
+            if (args is ["operation-help", var name])
+            {
+                Print(name == "run" ? WorkspaceRun.Help() : LocalOperations.Help(name));
+                return 0;
+            }
             var request = Parse(args);
             if (!OperatingSystem.IsWindowsVersionAtLeast(10))
                 return Report(69, request.Operation, null, null, "not-started", null, new("unsupported_platform", "Use Windows 10 or newer."));
@@ -86,7 +95,7 @@ internal static class EngineeringCli
     {
         var operation = args[0];
         var inputOption = operation switch { "l5x-summary" => "--input",
-            "l5x-inspect" or "l5x-preview" or "l5x-apply" or "sdk-offline" or "sdk-read-export" or "sdk-read-export-plan" => "--request",
+            "l5x-inspect" or "l5x-preview" or "l5x-apply" or "sdk-offline" or "sdk-read-export" or "sdk-read-export-plan" or "run" => "--request",
             _ => throw new OperationException("unknown_operation", "Use operations or --help to list the supported commands.") };
         string? input = null;
         var timeout = 30;
@@ -155,10 +164,18 @@ internal static class EngineeringCli
                 try { NativePilot.Confirm(id); }
                 catch (Exception ex) { (code, problem) = (70, Problem(ex)); }
             }
+            if (request.Operation == "run" && worker.Cleanup == "confirmed")
+            {
+                try { WorkspaceRun.Confirm(job, id); }
+                catch (Exception ex) { (code, problem) = (70, Problem(ex)); }
+            }
             var input = reply?.Result is { ValueKind: JsonValueKind.Object } payload && payload.TryGetProperty("input", out var fingerprint)
                 ? (JsonElement?)fingerprint : null;
             WriteNew(receipt, new { jobId = id, request.Operation, sourcePath = request.Input, input, exitCode = code,
-                error = problem, worker.Cleanup, worker.ResourceId, worker.Child, workerExitCode = worker.ExitCode, finishedUtc = DateTimeOffset.UtcNow });
+                error = problem, worker.Cleanup, worker.ResourceId, worker.Child, workerExitCode = worker.ExitCode,
+                invocation = File.Exists(Path.Combine(job, "invocation.json")) ? Path.Combine(job, "invocation.json") : null,
+                steps = Directory.Exists(Path.Combine(job, "steps")) ? Path.Combine(job, "steps") : null,
+                finishedUtc = DateTimeOffset.UtcNow });
             return Report(code, request.Operation, id, receipt, worker.Cleanup, code == 0 ? reply?.Result : null, problem);
         }
         finally { Console.CancelKeyPress -= cancel; }
@@ -187,6 +204,7 @@ internal static class EngineeringCli
                 "l5x-apply" => L5xWorkflow.Apply(job, input),
                 "sdk-read-export-plan" => SdkReadExport.Plan(input),
                 "sdk-offline" or "sdk-read-export" => NativePilot.Run(job, input, operation == "sdk-read-export"),
+                "run" => WorkspaceRun.ExecuteAsync(job, input).GetAwaiter().GetResult(),
                 _ => throw new OperationException("unknown_operation", "Unsupported worker operation.")
             };
             Print(new WorkerReply(JsonSerializer.SerializeToElement(result, Json), null));

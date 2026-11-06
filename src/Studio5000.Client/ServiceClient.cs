@@ -20,6 +20,16 @@ public sealed partial class ServiceClient : IDisposable
         this.root = root; this.errorTranslator = errorTranslator; this.ensureReady = ensureReady; this.maximumResponseBytes = maximumResponseBytes;
         if (ensureReady is null) InitializeConnection();
     }
+    public static ServiceClient InProcess(HttpMessageHandler handler) => new(handler);
+
+    private ServiceClient(HttpMessageHandler handler)
+    {
+        root = "";
+        http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("http://rockwell-local.invalid/"), Timeout = Timeout.InfiniteTimeSpan
+        };
+    }
     private void InitializeConnection()
     {
         var file = Path.Combine(root, ".local", "connection.json");

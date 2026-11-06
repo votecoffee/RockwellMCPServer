@@ -49,6 +49,9 @@ public abstract class ProxyExtension : IWorkspaceExtension
         using var client = new ServiceClient(context.WorkspaceRoot);
         return await entries[operation].Invoke(arguments, client, ct);
     }
+    public Task<JsonElement> InvokeLocalAsync(string operation, JsonElement arguments, ServiceClient client, CancellationToken ct) =>
+        entries[operation].Invoke(arguments, client, ct);
+    public static JsonNode DescribeType(Type type) => Schema(type, []);
     private static JsonNode Schema(Type type, HashSet<Type> ancestors)
     {
         var nullable = Nullable.GetUnderlyingType(type); if (nullable is not null) return Schema(nullable, ancestors);

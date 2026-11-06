@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Destination, [switch]$IncludeMcpAdapter)
+param([Parameter(Mandatory)][string]$Destination, [switch]$IncludeMcpAdapter, [switch]$IncludeVendorBridges)
 $ErrorActionPreference = 'Stop'
 if ($Destination -notmatch '^[A-Za-z]:[\\/]') { throw 'Use an absolute local Windows destination.' }
 $Destination = [IO.Path]::GetFullPath($Destination)
@@ -12,6 +12,12 @@ Push-Location -LiteralPath $repo
 try {
     dotnet publish 'src/Studio5000.EngineeringCli/Studio5000.EngineeringCli.csproj' -c Release -p:RestoreLockedMode=true -o $cli --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Rockwell CLI publish failed.' }
+    if ($IncludeVendorBridges) {
+        dotnet publish 'src/Studio5000.NativeBridge/Studio5000.NativeBridge.csproj' -c Release -p:RestoreLockedMode=true -o (Join-Path $cli 'bridges/sdk') --nologo
+        if ($LASTEXITCODE -ne 0) { throw 'Local Logix SDK bridge publish failed.' }
+        dotnet publish 'src/Studio5000.CipBridge/Studio5000.CipBridge.csproj' -c Release -p:RestoreLockedMode=true -o (Join-Path $cli 'bridges/cip') --nologo
+        if ($LASTEXITCODE -ne 0) { throw 'Local CIP bridge publish failed.' }
+    }
     if ($IncludeMcpAdapter) {
         dotnet publish 'src/Studio5000.EngineeringMcp/Studio5000.EngineeringMcp.csproj' -c Release -p:RestoreLockedMode=true -o $adapter --nologo
         if ($LASTEXITCODE -ne 0) { throw 'Optional Rockwell MCP adapter publish failed.' }

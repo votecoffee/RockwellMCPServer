@@ -95,7 +95,7 @@ Exploded ZIPs use legacy schema 1. Newer layouts, protected AOIs and structured-
 
 ## Install
 
-For a standalone Windows file workflow, publish the on-demand engineering CLI with the .NET 8 SDK. It can summarize saved L5X exports without the desktop service. The separately published MCP adapter is optional. [CLI and adapter setup](docs/ENGINEERING_MIDDLEWARE.md)
+The standalone Windows engineering CLI supports saved PLC and HMI workflows without starting the desktop service. It can also run bounded SDK jobs and watch batches with local vendor dependencies and explicit target settings. [Standalone CLI setup and usage](docs/ENGINEERING_MIDDLEWARE.md)
 
 ### Dependencies
 

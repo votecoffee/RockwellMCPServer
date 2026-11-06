@@ -13,6 +13,12 @@
           "YamlDotNet": "[16.3.0, )"
         }
       },
+      "studio5000.client": {
+        "type": "Project",
+        "dependencies": {
+          "Studio5000.Core": "[26.1104.14753, )"
+        }
+      },
       "studio5000.core": {
         "type": "Project",
         "dependencies": {
@@ -22,6 +28,12 @@
       },
       "studio5000.extensibility": {
         "type": "Project"
+      },
+      "studio5000.extensions.rockwell": {
+        "type": "Project",
+        "dependencies": {
+          "Studio5000.Client": "[26.1104.14753, )"
+        }
       }
     }
   }
