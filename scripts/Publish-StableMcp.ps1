@@ -41,6 +41,13 @@ try {
     $pointer = Join-Path $StateRoot 'launcher/current.json'
     $currentHash = if (Test-Path -LiteralPath $pointer) { Get-RockwellLauncherHash $pointer } else { 'absent' }
     if ($currentHash -cne $ExpectedPointerSha256) { throw 'Stable backend selection changed; review again.' }
+    if ($currentHash -ne 'absent' -and 'offline-service.json' -cin $paths) {
+        $pin = Read-RockwellLauncherJson (Join-Path $SourceDirectory 'offline-service.json')
+        if ($pin.PSObject.Properties['predecessorPointerSha256'] -and $pin.predecessorPointerSha256 -cne $currentHash) {
+            $existing = Read-RockwellLauncherJson $pointer 65536
+            if ($existing.backend_id -cne $backendId) { throw 'Regenerate the offline pin against the current selection and physical resource registry before rollover.' }
+        }
+    }
     $encoding = [Text.UTF8Encoding]::new($false); $manifestBytes = $encoding.GetBytes(($manifest | ConvertTo-Json -Depth 12 -Compress) + "`n")
     $snapshot = Get-RockwellBackendDirectory $StateRoot $backendId
     if ((Join-Path $snapshot 'Studio5000.StdioHost.exe').Length -gt 258) { throw 'Choose a shorter app-owned state root for Windows executable startup.' }

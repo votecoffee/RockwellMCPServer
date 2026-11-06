@@ -3,6 +3,15 @@ using Studio5000.Core;
 using Studio5000.Core.Resources;
 
 if (args is ["--version"]) { Console.WriteLine(WorkspaceIdentity.Version); return 0; }
+if (args is ["--inspect-frontdoor-images", var registry])
+{
+    if (!Path.IsPathFullyQualified(registry)) throw new ArgumentException("Use the explicit physical resource registry.");
+    ProjectService.RejectLinks(registry);
+    if (!Directory.Exists(registry)) throw new DirectoryNotFoundException("The explicit physical resource registry does not exist.");
+    var ledger = new ResourceLedger(registry, new WindowsResourceProcessDriver());
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { images = ledger.InspectUnresolvedFrontdoorImages() }));
+    return 0;
+}
 // This is a surviving transport owner, not a register-and-exit helper. The
 // SDK still creates/serves its ordinary stdio connection through raw byte pipes.
 var root = Path.GetFullPath(Environment.GetEnvironmentVariable("STUDIO5000_PLUGIN_ROOT") ?? Directory.GetCurrentDirectory());
@@ -15,7 +24,7 @@ if (args is ["--offline-bootstrap-preview"])
         ledger.Owner("rockwell-mcp-server")), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
     return 0;
 }
-if (args.Length != 0) throw new ArgumentException("The stdio owner accepts only its fixed read-only preview or no arguments.");
+if (args.Length != 0) throw new ArgumentException("The stdio owner accepts only its fixed read-only diagnostics or no arguments.");
 if (McpFrontdoorPolicy.Read(AppContext.BaseDirectory) is { } frontdoor)
 {
     await Studio5000.Mcp.McpApplication.RunAsync(args, frontdoor);

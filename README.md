@@ -26,7 +26,7 @@ If skills appear but chat tools are missing, use the optional [connection readin
 
 Use the [app-owned stable launcher](docs/STABLE_LAUNCHER.md) for reviewed immutable MCP backends and guarded selection outside Codex caches. Its [offline service bootstrap](docs/STABLE_LAUNCHER.md#offline-shared-service-startup) coordinates on-demand startup of the pinned ordinary service from the stdio supervisor, verifies its real owner and effective policy, and preserves active peers. Native SDK, CIP, controller and Windows SDK-service autostart remain disabled in this profile.
 
-The optional [low-resident Windows launcher](docs/STABLE_LAUNCHER.md#optional-windows-launcher) uses the same backend selection and exits its verifier before starting the MCP host. It is available as a separately staged binding.
+The optional [low-resident Windows launcher](docs/STABLE_LAUNCHER.md#optional-windows-launcher) uses the same backend selection and exits its verifier before starting the MCP host. For a stable-route update, prepare predecessor pins against the current selector and physical registry so the frontend can review departed metadata claims after rollover. [Stable-route update preparation](docs/STABLE_LAUNCHER.md#offline-shared-service-startup)
 
 Scoped structural reviews can inspect up to 128 exact element paths in one context request, retaining source/value fingerprints and protected flags while reducing repeated client calls. The GUI exposes this under **Diagnostics & workflows → Scoped structural batch**; see the [structural workflow](workflows/rockwell-engineering/references/structural-edits.md).
 

@@ -72,6 +72,13 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
         { names.Add(name); if (names.Count > 4096) throw new InvalidOperationException("Resource history capacity exceeded; preserve evidence before archival."); }
         return names.Order(StringComparer.Ordinal).Select(name => Get(Path.GetFileNameWithoutExtension(name))).ToArray();
     }
+    // Publication observes paths only. Admission rechecks the complete ledger under the lock.
+    public string[] InspectUnresolvedFrontdoorImages()
+    {
+        var records = Records();
+        return records.Where(record => ResourceOwner.FrontdoorShape(record) && !ResourceOwner.HasFrontdoorReference(record, records))
+            .Select(record => record.Owner.Executable).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
     internal T Locked<T>(Func<T> action)
     {
         if (maximumActivePerApp is < 1 or > 256) throw new ArgumentException("Invalid active resource limit.");
@@ -288,8 +295,11 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             record.Ownership == "attached" && record.CleanupMode == "report" &&
             record.Containment == "app_owned" && record.Process is null && record.Members.Length == 0 &&
             record.Receipt is null && record.RecoveryBarrier is null && record.BarrierResolution is null;
-        private static bool FrontdoorShape(ResourceRecord record) =>
+        internal static bool FrontdoorShape(ResourceRecord record) =>
             FrontdoorObservation(record) && record.State == "active" && record.Reconciliation is null;
+        internal static bool HasFrontdoorReference(ResourceRecord record, ResourceRecord[] records) =>
+            records.Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
+                (other.Owner == record.Owner || other.Process == record.Owner || other.Members.Contains(record.Owner)));
         internal static bool RetainedFrontdoorShape(ResourceRecord record)
         {
             if (!FrontdoorObservation(record) || record.State != "released" || record.Reconciliation is not { } close) return false;
@@ -321,8 +331,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
             if (record.Revision != revision || !FrontdoorShape(record) ||
                 !string.Equals(record.Owner.Executable, Path.GetFullPath(reviewedImage), StringComparison.OrdinalIgnoreCase) ||
                 ledger.Driver.State(record.Owner) is not ("absent" or "different") ||
-                (lockedRecords ?? ledger.Records()).Any(other => other.ResourceId != record.ResourceId && !other.Terminal &&
-                    (other.Owner == record.Owner || other.Process == record.Owner || other.Members.Contains(record.Owner)))) return null;
+                HasFrontdoorReference(record, lockedRecords ?? ledger.Records())) return null;
             return ledger.Replace(record with { State = "released", Reconciliation = new ResourceReconciliation(OwnerId, Identity, revision,
                 FrontdoorDeparted, Now).Normalize() });
         }

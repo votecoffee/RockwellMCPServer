@@ -11,7 +11,8 @@ public sealed record OfflinePinnedFile(string Path, long Size, string Sha256);
 public sealed record OfflineFrontendPin(string Directory, OfflinePinnedFile[] Files, string? UnboundLaunchContract = null,
     string? SourceCommit = null, string? BackendManifestSha256 = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record OfflineServicePin(int SchemaVersion, string ServiceVersion, OfflinePinnedFile[] Files, OfflineFrontendPin[] PreviousFrontends)
+public sealed record OfflineServicePin(int SchemaVersion, string ServiceVersion, OfflinePinnedFile[] Files, OfflineFrontendPin[] PreviousFrontends,
+    string? PredecessorPointerSha256 = null)
 {
     internal const string FileName = "offline-service.json";
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = false };
@@ -24,13 +25,15 @@ public sealed record OfflineServicePin(int SchemaVersion, string ServiceVersion,
     { using var file = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(file)).ToLowerInvariant(); }
     internal static JsonDocument Read(string path, int maximum)
         => Read(path, maximum, out _);
-    internal static JsonDocument Read(string path, int maximum, out string revision)
+    internal static JsonDocument Read(string path, int maximum, out string revision, string? expectedRevision = null)
     {
         ProjectService.RejectLinks(path);
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         if (file.Length > maximum) throw new InvalidOperationException("Offline bootstrap metadata exceeds its bound.");
         var bytes = new byte[checked((int)file.Length)]; file.ReadExactly(bytes);
         revision = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        if (expectedRevision is not null && revision != expectedRevision)
+            throw new InvalidOperationException("Predecessor publication provenance changed after review.");
         var start = bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? 3 : 0;
         var document = JsonDocument.Parse(bytes.AsMemory(start), new() { MaxDepth = 64 });
         try { CheckDuplicates(document.RootElement); return document; } catch { document.Dispose(); throw; }
@@ -51,6 +54,8 @@ public sealed record OfflineServicePin(int SchemaVersion, string ServiceVersion,
         var pin = document.Deserialize<OfflineServicePin>(Json) ?? throw new InvalidOperationException("Missing offline service pin.");
         if (pin.SchemaVersion != 1 || !System.Text.RegularExpressions.Regex.IsMatch(pin.ServiceVersion ?? "", @"^\d+\.\d+\.\d+$") || pin.PreviousFrontends is null || pin.PreviousFrontends.Length > 8)
             throw new InvalidOperationException("Unsupported offline service pin.");
+        if (pin.PredecessorPointerSha256 is { } predecessor && !System.Text.RegularExpressions.Regex.IsMatch(predecessor, "^[a-f0-9]{64}$"))
+            throw new InvalidOperationException("Invalid predecessor selection revision.");
         VerifyFiles(root, pin.Files, [Service, "artifacts/app/Service/Studio5000.Service.dll", "artifacts/app/Service/Studio5000.Core.dll", Worker,
             "artifacts/app/ExtensionWorker/Studio5000.ExtensionWorker.dll", Script]);
         if (pin.Files.Any(f => f.Path != Script && !f.Path.StartsWith("artifacts/app/Service/", StringComparison.Ordinal) && !f.Path.StartsWith("artifacts/app/ExtensionWorker/", StringComparison.Ordinal)))
@@ -63,23 +68,25 @@ public sealed record OfflineServicePin(int SchemaVersion, string ServiceVersion,
         {
             if (!System.IO.Path.IsPathFullyQualified(previous.Directory)) throw new InvalidOperationException("Predecessor closure must be explicit.");
             VerifyFiles(previous.Directory, previous.Files, ["Studio5000.StdioHost.exe", "Studio5000.Mcp.exe", "Studio5000.Core.dll"]);
-            if (previous.UnboundLaunchContract is not null)
+            var legacy = previous.UnboundLaunchContract is not null;
+            if (legacy && (previous.UnboundLaunchContract != LegacyUnboundContract || previous.SourceCommit != LegacyUnboundSource))
+                throw new InvalidOperationException("Unbound retirement requires the explicitly reviewed legacy stateless launch contract.");
+            if (legacy || previous.SourceCommit is not null || previous.BackendManifestSha256 is not null)
             {
-                if (previous.UnboundLaunchContract != LegacyUnboundContract || previous.SourceCommit != LegacyUnboundSource ||
+                if (!System.Text.RegularExpressions.Regex.IsMatch(previous.SourceCommit ?? "", "^[a-f0-9]{40}$") ||
                     !System.Text.RegularExpressions.Regex.IsMatch(previous.BackendManifestSha256 ?? "", "^[a-f0-9]{64}$"))
-                    throw new InvalidOperationException("Unbound retirement requires the explicitly reviewed legacy stateless launch contract.");
-                var manifestPath = System.IO.Path.Combine(previous.Directory, "backend.json"); ProjectService.RejectLinks(manifestPath);
-                if (Hash(manifestPath) != previous.BackendManifestSha256) throw new InvalidOperationException("Legacy provenance changed after review.");
-                using var manifest = Read(manifestPath, 262144);
+                    throw new InvalidOperationException("Predecessor provenance requires its source and manifest hashes.");
+                using var manifest = Read(System.IO.Path.Combine(previous.Directory, "backend.json"), 262144, out _, previous.BackendManifestSha256);
                 if (manifest.RootElement.GetProperty("source_commit").GetString() != previous.SourceCommit ||
                     manifest.RootElement.GetProperty("contract").GetString() != "rockwell-owned-stdio-v1")
-                    throw new InvalidOperationException("Legacy source provenance does not match the reviewed stateless contract.");
+                    throw new InvalidOperationException("Predecessor publication provenance changed after review.");
                 var original = manifest.RootElement.GetProperty("files").Deserialize<OfflinePinnedFile[]>(Json)!;
                 if (original.Length != previous.Files.Length || original.Any(f => !previous.Files.Contains(f)))
-                    throw new InvalidOperationException("Legacy closure differs from its immutable publication inventory.");
+                    throw new InvalidOperationException("Predecessor closure differs from its immutable publication inventory.");
+            }
+            if (legacy)
                 VerifyFiles(previous.Directory, previous.Files, ["Studio5000.StdioHost.exe", "Studio5000.StdioHost.dll", "Studio5000.StdioHost.deps.json", "Studio5000.StdioHost.runtimeconfig.json",
                     "Studio5000.Mcp.exe", "Studio5000.Mcp.dll", "Studio5000.Mcp.deps.json", "Studio5000.Mcp.runtimeconfig.json", "Studio5000.Core.dll"]);
-            }
         }
         return pin;
     }

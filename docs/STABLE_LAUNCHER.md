@@ -30,10 +30,12 @@ Review the `.exe`, `.dll`, `.deps.json` and `.runtimeconfig.json` as one payload
 Generate the required hash-bound payload before creating the candidate inventory:
 
 ```powershell
-.\scripts\New-OfflineServicePin.ps1 -AppRoot C:\Apps\RockwellMCPServer -Destination C:\Prepared\Candidate\Mcp\offline-service.json -ExpectedServiceVersion <reviewed-serving-version> -PredecessorStateRoot C:\Users\Example\AppData\Local\RockwellMCPServer
+.\scripts\New-OfflineServicePin.ps1 -AppRoot C:\Apps\RockwellMCPServer -Destination C:\Prepared\Candidate\Mcp\offline-service.json -ExpectedServiceVersion <reviewed-serving-version> -PredecessorStateRoot C:\Users\Example\AppData\Local\RockwellMCPServer -ResourceRegistry C:\Users\Example\AppData\Local\CodexMCPManager\Registry
 ```
 
 The pin binds the existing ordinary service and extension-worker file inventories, starter script, expected serving version, and up to eight reviewed predecessor frontend closures. Product-version disagreement, links, duplicate/traversal members and file drift refuse. Full application builds generate a pin for their just-published service. A frontend-only update can pin the existing accepted service without replacing its binaries or changing engineering settings.
+
+For a stable-route update, pass the physical registry from the saved binding and the app-owned state root. The compiled candidate stdio host beside the pin reads typed, unresolved stateless observations in diagnostic mode. Preparation verifies matching retained selection receipts and complete immutable manifests for the observed predecessor paths. The output reports missing provenance and binds the pin to the reviewed selector revision. Publication of a new-format pin requires that revision for rollover. Any subsequent admission still checks the exact owner state and conflicts under the ledger lock before releasing a claim. Live, unknown and conflicting observations remain protected.
 
 MCP metadata initialization and tool listing respond while readiness runs in the background. Before any engineering HTTP request is dispatched, the client waits for a genuine matching service owner, loopback health and authenticated effective-policy readback. This does not replay HTTP writes, native jobs or customer operations. A verified departed service generation can be ensured again on demand during the same chat.
 

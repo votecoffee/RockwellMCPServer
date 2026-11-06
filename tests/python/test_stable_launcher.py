@@ -242,3 +242,113 @@ def test_pointer_rotation_preserves_the_running_backend_and_retains_prior_select
         if process.poll() is None:
             process.stdin.close()
             process.wait(timeout=10)
+
+
+def test_rollover_reviews_matching_receipts_and_preserves_protected_rows(tmp_path, harmless_backend):
+    shell = SHELLS[0]
+    case = prepare(tmp_path, harmless_backend)
+    case["state"] = tmp_path / "stable"
+    source = case["source"]
+
+    def rehash_candidate():
+        candidate = json.loads(case["manifest"].read_bytes())
+        candidate["payloads"] = [
+            {"path": "Mcp/" + item.name, "sha256": hashlib.sha256(item.read_bytes()).hexdigest(), "size": item.stat().st_size}
+            for item in sorted(source.iterdir(), key=lambda item: item.name)
+        ]
+        case["manifest"].write_text(json.dumps(candidate), encoding="utf-8")
+        case["manifest_sha"] = hashlib.sha256(case["manifest"].read_bytes()).hexdigest()
+
+    def select(previous):
+        rehash_candidate()
+        result = publish(shell, case, expected=previous)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    (source / "frontdoor.json").write_text('{"schemaVersion":1}', encoding="utf-8")
+    departed = select("absent")
+    (source / "Studio5000.StdioHost.dll").write_bytes(b"Harmless conflicting predecessor")
+    conflicting = select(departed["pointerSha256"])
+    (source / "Studio5000.StdioHost.dll").write_bytes(b"Harmless current selection")
+    current = select(conflicting["pointerSha256"])
+
+    registry = tmp_path / "registry"
+    records = registry / "resources"
+    records.mkdir(parents=True)
+
+    def identity(snapshot, pid, host):
+        return {"host_id": host * 64, "pid": pid, "created": "123",
+                "executable": str(Path(snapshot) / "Studio5000.StdioHost.exe")}
+
+    def frontdoor(number, owner):
+        return {"schema_version": 1, "resource_id": f"{number:032x}", "app_id": "rockwell-mcp-frontdoor",
+                "owner_id": f"{100 + number:032x}", "owner": owner, "kind": "mcp-frontdoor",
+                "label": "Rockwell MCP metadata frontdoor", "state": "active",
+                "ownership": "attached", "created_at": 1, "updated_at": 1}
+
+    conflict = identity(conflicting["snapshot"], 12, "a")
+    unproven = case["state"] / "launcher/backends" / ("f" * 32)
+    rows = [frontdoor(1, identity(departed["snapshot"], 10, "a")),
+            frontdoor(2, identity(departed["snapshot"], 11, "b")), frontdoor(3, conflict),
+            dict(frontdoor(4, identity(current["snapshot"], 13, "a")),
+                 app_id="other-fixture", kind="process", members=[conflict]),
+            frontdoor(5, identity(unproven, 14, "a"))]
+    for row in rows:
+        (records / (row["resource_id"] + ".json")).write_text(json.dumps(row), encoding="utf-8")
+    originals = {item.name: item.read_bytes() for item in records.iterdir()}
+
+    app = case["app"]
+    settings = {"ServiceUrl": "http://127.0.0.1:24587", "Studio5000": {
+        "EnableControllerOperations": False, "EnableSdkServiceRecovery": False, "AutoStartSdkService": False,
+        "NativeBridgePath": None, "CipBridgePath": None, "ExtensionWorkerPath": "artifacts/app/ExtensionWorker/Studio5000.ExtensionWorker.exe"}}
+    (app / "service.local.json").write_text(json.dumps(settings), encoding="utf-8")
+    for folder, name, files in (("Service", "Studio5000.Service", ("Studio5000.Core.dll",)),
+                                ("ExtensionWorker", "Studio5000.ExtensionWorker", ())):
+        runtime = app / "artifacts/app" / folder
+        runtime.mkdir(parents=True)
+        for extension in (".exe", ".dll"):
+            shutil.copyfile(harmless_backend / ("Rockwell.LauncherFixture" + extension), runtime / (name + extension))
+        for file in files:
+            (runtime / file).write_bytes(b"Inventory fixture only")
+    (app / "scripts").mkdir()
+    (app / "scripts/Start-Service.ps1").write_text("throw 'The starter must not run.'", encoding="utf-8")
+
+    inspector = tmp_path / "candidate"
+    built = subprocess.run(
+        ["dotnet", "publish", str(ROOT / "src/Studio5000.StdioHost/Studio5000.StdioHost.csproj"),
+         "-c", "Release", "-o", str(inspector), "--nologo", "--verbosity", "quiet"],
+        capture_output=True, text=True, encoding="utf-8", timeout=90)
+    assert built.returncode == 0, built.stdout + built.stderr
+    pin_path = inspector / "offline-service.json"
+    version = json.loads((ROOT / "release-version.json").read_bytes())["displayVersion"]
+    prepared = subprocess.run(
+        [shell, "-NoLogo", "-NoProfile", "-File", str(ROOT / "scripts/New-OfflineServicePin.ps1"),
+         "-AppRoot", str(app), "-Destination", str(pin_path), "-ExpectedServiceVersion", version,
+         "-PredecessorStateRoot", str(case["state"]), "-ResourceRegistry", str(registry)],
+        capture_output=True, text=True, encoding="utf-8", timeout=45)
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    review = json.loads(prepared.stdout)
+    pin = json.loads(pin_path.read_bytes())
+    assert [Path(entry["directory"]) for entry in pin["previousFrontends"]] == [Path(current["snapshot"]), Path(departed["snapshot"])]
+    assert review["reviewedPredecessors"] == [{"backendId": departed["backendId"], "publicationReceiptSha256": departed["pointerSha256"]}]
+    assert pin["predecessorPointerSha256"] == current["pointerSha256"]
+    assert review["unreviewedSnapshotPrefixes"] == [unproven.name]
+
+    preview = subprocess.run([str(inspector / "Studio5000.StdioHost.exe"), "--offline-bootstrap-preview"],
+        env={**os.environ, "STUDIO5000_PLUGIN_ROOT": str(app), "ROCKWELL_RESOURCE_REGISTRY": str(registry)},
+        capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert preview.returncode == 0, preview.stderr
+    assert json.loads(preview.stdout)["readOnly"]
+
+    staged_pin = source / "offline-service.json"
+    staged_pin.write_text(json.dumps(dict(pin, predecessorPointerSha256="0" * 64)), encoding="utf-8")
+    rehash_candidate()
+    stale = publish(shell, case, expected=current["pointerSha256"], plan=True)
+    assert stale.returncode != 0 and "Regenerate the offline pin" in stale.stderr
+    shutil.copyfile(pin_path, staged_pin)
+    rehash_candidate()
+    valid = publish(shell, case, expected=current["pointerSha256"], plan=True)
+    assert valid.returncode == 0, valid.stderr
+    assert not json.loads(valid.stdout)["selected"]
+    assert {item.name: item.read_bytes() for item in records.iterdir()} == originals
+    assert not (app / ".local").exists()
