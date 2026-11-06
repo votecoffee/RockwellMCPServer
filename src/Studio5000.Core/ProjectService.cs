@@ -47,7 +47,12 @@ public sealed partial class ProjectService : IDisposable
         if (roots.Length == 0 && !options.AllowAnySourcePath) throw new InvalidOperationException("At least one AllowedRoots entry is required when source access is restricted.");
         Directory.CreateDirectory(state);
         RejectLinks(state);
-        instanceLock = new FileStream(Path.Combine(state, "service.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        try { instanceLock = new FileStream(Path.Combine(state, "service.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33)
+        {
+            gate.Dispose();
+            throw new OperationException("workspace_busy", "Another process owns this workspace. Wait for it to finish before submitting another request with the same workspace name.");
+        }
         Directory.CreateDirectory(Path.Combine(state, "projects"));
         Directory.CreateDirectory(Path.Combine(state, "artifacts"));
         sdkService = new(options, sdkServiceReceiptDirectory ?? Path.Combine(state, "sdk-service-control"), sdkServiceDriver ?? new WindowsSdkServiceDriver(),

@@ -17,10 +17,20 @@ public sealed partial class ProjectService
 
     public ProjectComparisonReport CompareProjects(ProjectCompareRequest request)
     {
-        var left = Get(request.LeftProjectId); var right = Get(request.RightProjectId);
-        if (left.Kind != "logix" || right.Kind != "logix") throw new OperationException("not_logix", "Select two registered Logix snapshots.");
-        Expect(left, request.LeftSha256); Expect(right, request.RightSha256);
-        return ProjectComparison.Compare(left, XmlProjects.Parse(File.ReadAllBytes(RevisionFile(left.Id, left.Revision))),
-            right, XmlProjects.Parse(File.ReadAllBytes(RevisionFile(right.Id, right.Revision))), request);
+        var (left, a, right, b) = ComparisonDocuments(request.LeftProjectId, request.LeftSha256, request.RightProjectId, request.RightSha256);
+        return ProjectComparison.Compare(left, a, right, b, request);
+    }
+
+    private (ProjectInfo Project, byte[] Bytes) ReadBoundedLogixRevision(string id, string expectedSha256)
+    {
+        var project = Read<ProjectInfo>(ProjectMeta(id));
+        Expect(project, expectedSha256);
+        if (project.Kind != "logix") throw new OperationException("not_logix", "Select an exact managed Logix snapshot.");
+        using var file = File.OpenRead(RevisionFile(id, project.Revision));
+        if (file.Length > 64 * 1024 * 1024) throw new OperationException("file_too_large", "An analysis input supports at most 64 MiB.");
+        var bytes = new byte[(int)file.Length];
+        file.ReadExactly(bytes);
+        if (Hash(bytes) != project.CurrentSha256) throw new OperationException("state_tampered", "Working revision hash does not match its manifest.");
+        return (project, bytes);
     }
 }

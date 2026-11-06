@@ -12,13 +12,31 @@ internal sealed record LogicAddress(string Symbol, string Tag, string? Program, 
 
 internal sealed class LogicContext(XDocument document)
 {
+    private Dictionary<string, XElement>? controllerTags;
+    private Dictionary<string, XElement>? programs;
+    private readonly Dictionary<string, Dictionary<string, XElement>> localTags = new(StringComparer.OrdinalIgnoreCase);
     internal XDocument Document => document;
     internal XElement Controller => document.Root!.Element("Controller")!;
     internal static bool Same(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     internal XElement? Tag(string name, string? program)
     {
-        var scope = program is null ? Controller : Controller.Elements("Programs").Elements("Program").FirstOrDefault(p => Same((string?)p.Attribute("Name"), program));
-        return scope?.Elements("Tags").Elements("Tag").FirstOrDefault(t => Same((string?)t.Attribute("Name"), name));
+        static Dictionary<string, XElement> Index(IEnumerable<XElement> nodes)
+        {
+            var index = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var node in nodes)
+                if ((string?)node.Attribute("Name") is { } key) index.TryAdd(key, node);
+            return index;
+        }
+        if (program is null)
+            return (controllerTags ??= Index(Controller.Elements("Tags").Elements("Tag"))).GetValueOrDefault(name);
+        if (!localTags.TryGetValue(program, out var tags))
+        {
+            programs ??= Index(Controller.Elements("Programs").Elements("Program"));
+            var scope = programs.GetValueOrDefault(program);
+            if (scope is null) return null;
+            localTags.Add(program, tags = Index(scope.Elements("Tags").Elements("Tag")));
+        }
+        return tags.GetValueOrDefault(name);
     }
     internal LogicAddress? Resolve(string text, string? program, Dictionary<string, LogicAddress>? bindings = null, HashSet<string>? active = null)
     {
@@ -39,6 +57,9 @@ internal sealed class LogicContext(XDocument document)
 
 public static class LogicTracing
 {
+    private const int MaximumUsages = 250_000;
+    private const int MaximumDependencies = 500_000;
+    private const int MaximumExpandedRungs = 100_000;
     public const string Boundary = "Conservative saved-project dependency analysis at base-tag granularity. Instruction operands and rung guards describe possible reads/writes, not scan execution. Aliases and unambiguous AOI call parameters are followed; dynamic addressing, source-protected/unsupported languages/instructions and unresolved layouts are explicit diagnostics. Scheduling, indirect routine dispatch, external writers and native compiler binding are not proven.";
     internal static string[] Roles(string instruction, int count)
     {
@@ -59,29 +80,32 @@ public static class LogicTracing
     {
         if (request.Depth is < 0 or > 8 || request.Direction is not ("both" or "upstream" or "downstream")) throw new OperationException("logic_trace_query", "Use depth 0..8 and direction both/upstream/downstream.");
         WatchValidation.Identifier(request.TagName); if (request.ProgramName is not null) WatchValidation.Identifier(request.ProgramName);
-        ProjectComparison.ValidateSize(document); var context = new LogicContext(document);
+        ProjectComparison.ValidateSize(document, ProjectComparison.MaximumAnalysisElements); var context = new LogicContext(document);
         if (context.Tag(request.TagName, request.ProgramName) is null) throw new OperationException("logic_trace_tag", "Select an existing exact tag declaration.");
         var root = context.Resolve((request.ProgramName is null ? "" : "Program:" + request.ProgramName + ".") + request.TagName, null)!;
         var usages = new List<LogicUsage>(); var edges = new List<LogicDependency>(); var issues = new HashSet<string>(StringComparer.Ordinal); var limited = false; var calls = 0; var sourceCharacters = 0;
         void Issue(string message) { if (issues.Count < 100) issues.Add(message); else limited = true; }
-        void Edge(LogicDependency edge) { if (edges.Count >= 100000) throw new OperationException("logic_trace_limit", "Trace exceeds 100000 dependencies; use a smaller saved snapshot."); edges.Add(edge); }
+        void Edge(LogicDependency edge) { if (edges.Count >= MaximumDependencies) throw new OperationException("logic_trace_limit", "Trace exceeds 500000 dependencies; use a smaller saved snapshot."); edges.Add(edge); }
         if (root.Issue is not null) Issue(root.Issue + ": " + root.Symbol);
         IEnumerable<LadderPreview.Part> Flatten(IEnumerable<LadderPreview.Part> parts) => parts.SelectMany(p => p.Legs is null ? new[] { p } : p.Legs.SelectMany(Flatten));
         var definitions = context.Controller.Elements("AddOnInstructionDefinitions").Elements("AddOnInstructionDefinition").ToDictionary(a => (string)a.Attribute("Name")!, StringComparer.OrdinalIgnoreCase);
         void Routine(XElement routine, string? program, string owner, Dictionary<string, LogicAddress>? bindings, HashSet<string> active)
         {
+            var routinePath = XmlProjects.PathOf(routine);
+            var ownerPath = owner + "/" + (string?)routine.Attribute("Name");
             if ((string?)routine.Attribute("Type") == "ST")
             {
-                Issue("st_partial_effects: simple leading assignments classified; compound control flow/calls remain unknown: " + XmlProjects.PathOf(routine));
+                Issue("st_partial_effects: simple leading assignments classified; compound control flow/calls remain unknown: " + routinePath);
+                var hasComments = routine.Value.Contains("(*", StringComparison.Ordinal);
                 foreach (var line in routine.Elements("STContent").Elements("Line"))
                 {
                     var text = line.Value; if (text.Length > 1024 * 1024 || (sourceCharacters += text.Length) > 16 * 1024 * 1024) throw new OperationException("logic_trace_limit", "ST source exceeds the trace text budget.");
                     var assignment = Regex.Match(text, @"\A\s*(?<left>(?:Program:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_0-9]+|\[\d+\])*)\s*:=", RegexOptions.IgnoreCase);
                     // Classify only a single leading assignment. Calls and compound statements may write other operands.
-                    var simple = !routine.Value.Contains("(*", StringComparison.Ordinal) && assignment.Success && text.IndexOf(":=", assignment.Index + assignment.Length, StringComparison.Ordinal) < 0 &&
+                    var simple = !hasComments && assignment.Success && text.IndexOf(":=", assignment.Index + assignment.Length, StringComparison.Ordinal) < 0 &&
                         !Regex.IsMatch(text[assignment.Length..], @"[();]|\b(?:IF|THEN|ELSE|FOR|WHILE|REPEAT|CASE|RETURN)\b", RegexOptions.IgnoreCase);
                     // A single trailing semicolon is permitted, but not a second statement.
-                    if (!simple && !routine.Value.Contains("(*", StringComparison.Ordinal) && assignment.Success && text.TrimEnd().EndsWith(';'))
+                    if (!simple && !hasComments && assignment.Success && text.TrimEnd().EndsWith(';'))
                     {
                         var body = text.TrimEnd()[..^1];
                         simple = body.IndexOf(":=", assignment.Length, StringComparison.Ordinal) < 0 && !Regex.IsMatch(body[assignment.Length..], @"[();]|\b(?:IF|THEN|ELSE|FOR|WHILE|REPEAT|CASE|RETURN)\b", RegexOptions.IgnoreCase);
@@ -92,22 +116,29 @@ public static class LogicTracing
                         var operand = text.Substring(token.Start, token.Length); var address = context.Resolve(operand, program, bindings); if (address is null) continue;
                         var role = simple ? token.Start == assignment.Groups["left"].Index ? "write" : "read" : "unknown";
                         if (address.Issue is not null) Issue(address.Issue + ": " + operand);
-                        local.Add(new(address.Symbol, operand, role, "ST", owner + "/" + (string?)routine.Attribute("Name"), XmlProjects.PathOf(routine), path, -1, address.Aliases));
+                        local.Add(new(address.Symbol, operand, role, "ST", ownerPath, routinePath, path, -1, address.Aliases));
                         if (local.Count > 10000) throw new OperationException("logic_trace_limit", "ST line exceeds the trace operand budget.");
                     }
                     usages.AddRange(local);
                     foreach (var read in local.Where(u => u.Role == "read")) foreach (var write in local.Where(u => u.Role == "write"))
                         if (!LogicContext.Same(read.Symbol, write.Symbol)) Edge(new(read.Symbol, write.Symbol, "possible-statement-dependency", path));
-                    if (usages.Count > 50000 || edges.Count > 100000) throw new OperationException("logic_trace_limit", "ST trace exceeds its usage/dependency budget.");
+                    if (usages.Count > MaximumUsages) throw new OperationException("logic_trace_limit", "ST trace exceeds its usage budget.");
                 }
                 return;
             }
-            if ((string?)routine.Attribute("Type") != "RLL") { Issue("unsupported_routine_language: " + XmlProjects.PathOf(routine)); return; }
-            var index = 0;
+            if ((string?)routine.Attribute("Type") != "RLL") { Issue("unsupported_routine_language: " + routinePath); return; }
+            var index = 0; var rungOrdinal = 0; var contentPath = "";
+            XElement? previousContent = null;
             foreach (var rung in routine.Elements("RLLContent").Elements("Rung"))
             {
-                var path = XmlProjects.PathOf(rung); var text = (string?)rung.Element("Text") ?? "";
-                if ((sourceCharacters += text.Length) > 16 * 1024 * 1024 || ++calls > 10000) throw new OperationException("logic_trace_limit", "Trace exceeds 16 MiB source or 10000 expanded rungs.");
+                if (rung.Parent != previousContent)
+                {
+                    previousContent = rung.Parent!;
+                    contentPath = routinePath + $"/RLLContent[{previousContent.ElementsBeforeSelf("RLLContent").Count() + 1}]";
+                    rungOrdinal = 0;
+                }
+                var path = contentPath + $"/Rung[{++rungOrdinal}]"; var text = (string?)rung.Element("Text") ?? "";
+                if ((sourceCharacters += text.Length) > 16 * 1024 * 1024 || ++calls > MaximumExpandedRungs) throw new OperationException("logic_trace_limit", "Trace exceeds 16 MiB source or 100000 expanded rungs.");
                 LadderPreview.Part[] parts;
                 try { parts = Flatten(LadderPreview.ParseLogic(text)).ToArray(); }
                 catch (OperationException ex) { Issue(ex.Code + ": " + path); index++; continue; }
@@ -161,17 +192,17 @@ public static class LogicTracing
                         var role = roles[i];
                         if (address.Issue is not null) Issue(address.Issue + ": " + part.Operands[i]);
                         if (Regex.IsMatch(address.Member, @"\[[^\]]*[A-Za-z_][^\]]*\]")) { role = "unknown"; Issue("dynamic_address_unknown: " + part.Operands[i]); }
-                        local.Add(new(address.Symbol, part.Operands[i], role, part.Instruction, owner + "/" + (string?)routine.Attribute("Name"), XmlProjects.PathOf(routine), path, index, address.Aliases));
+                        local.Add(new(address.Symbol, part.Operands[i], role, part.Instruction, ownerPath, routinePath, path, index, address.Aliases));
                     }
                 }
                 usages.AddRange(local);
                 foreach (var read in local.Where(u => u.Role is "read" or "read-write"))
                 foreach (var write in local.Where(u => u.Role is "write" or "read-write"))
                     if (!LogicContext.Same(read.Symbol, write.Symbol)) Edge(new(read.Symbol, write.Symbol, "possible-rung-dependency", path));
-                if (usages.Count > 50000 || edges.Count > 100000) throw new OperationException("logic_trace_limit", "Trace exceeds its usage/dependency budget.");
+                if (usages.Count > MaximumUsages) throw new OperationException("logic_trace_limit", "Trace exceeds its usage budget.");
                 index++;
             }
-            if (!routine.Elements("RLLContent").Elements("Rung").Any()) Issue("routine_empty_or_source_unavailable: " + XmlProjects.PathOf(routine));
+            if (index == 0) Issue("routine_empty_or_source_unavailable: " + routinePath);
         }
         foreach (var program in context.Controller.Elements("Programs").Elements("Program"))
         foreach (var routine in program.Elements("Routines").Elements("Routine")) Routine(routine, (string?)program.Attribute("Name"), "Program:" + (string?)program.Attribute("Name"), null, new(StringComparer.OrdinalIgnoreCase));
@@ -200,7 +231,7 @@ public sealed partial class ProjectService
 {
     public LogicTraceReport TraceLogic(string id, LogicTraceRequest request)
     {
-        var p = Get(id); Expect(p, request.ExpectedSha256); if (p.Kind != "logix") throw new OperationException("not_logix", "Select a Logix snapshot.");
-        return LogicTracing.Trace(p, XmlProjects.Parse(File.ReadAllBytes(RevisionFile(p.Id, p.Revision))), request);
+        var (project, bytes) = ReadBoundedLogixRevision(id, request.ExpectedSha256);
+        return LogicTracing.Trace(project, XmlProjects.ParseForAnalysis(bytes), request);
     }
 }

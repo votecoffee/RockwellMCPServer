@@ -1,11 +1,14 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml.Linq;
 
 namespace Studio5000.Core;
 
 public sealed record ProjectCompareRequest(string LeftProjectId, string LeftSha256, string RightProjectId, string RightSha256,
-    string? Query = null, int Offset = 0, int Limit = 100, bool IncludeRungNumbers = false);
+    string? Query = null, int Offset = 0, int Limit = 100, bool IncludeRungNumbers = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ProgramName = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RoutineName = null);
 public sealed record ProjectDifference(string Kind, string Path, string Change, string? LeftXPath, string? RightXPath,
     string? LeftSha256, string? RightSha256, string? LeftXml, string? RightXml, bool LeftTruncated, bool RightTruncated);
 public sealed record ProjectComparisonReport(ProjectInfo Left, ProjectInfo Right, int TotalChanges, int FilteredChanges,
@@ -13,6 +16,7 @@ public sealed record ProjectComparisonReport(ProjectInfo Left, ProjectInfo Right
 
 public static class ProjectComparison
 {
+    internal const int MaximumAnalysisElements = 1_000_000;
     private static readonly HashSet<string> Expanded = ["RSLogix5000Content", "Controller", "Programs", "Program", "Routines",
         "AddOnInstructionDefinitions", "AddOnInstructionDefinition", "Tags", "DataTypes", "Modules", "Tasks"];
 
@@ -27,25 +31,40 @@ public static class ProjectComparison
     {
         if (request.Offset is < 0 or > 100000 || request.Limit is < 1 or > 200 || request.Query?.Length > 256)
             throw new OperationException("invalid_comparison", "Use offset 0..100000, limit 1..200 and a query up to 256 characters.");
-        ValidateSize(leftDocument); ValidateSize(rightDocument);
+        ValidateSize(leftDocument, MaximumAnalysisElements); ValidateSize(rightDocument, MaximumAnalysisElements);
+        ValidateScope(request);
         var changes = new List<ProjectDifference>();
+        var addedCount = 0; var removedCount = 0; var modifiedCount = 0; var filteredCount = 0;
         string Canon(XElement element, bool header = false) => Normalize(element, request.IncludeRungNumbers, header).ToString(SaveOptions.DisableFormatting);
         void Add(XElement? a, XElement? b, string path, bool header = false)
         {
+            if (!header && XNode.DeepEquals(a, b)) return;
             var before = a is null ? null : Canon(a, header);
             var after = b is null ? null : Canon(b, header);
             if (before == after) return;
+            var kind = (b ?? a)!.Name.LocalName;
+            var change = a is null ? "added" : b is null ? "removed" : "modified";
+            if (a is null) addedCount++;
+            else if (b is null) removedCount++;
+            else modifiedCount++;
+            if (!Matches(request.Query, path, kind)) return;
+            var position = filteredCount++;
+            if (allMatches && filteredCount > ComparisonReviews.MaximumChanges)
+                throw new OperationException("comparison_review_limit", "A review supports up to 5000 matching changes; narrow the comparison filter.");
+            if (!allMatches && (position < request.Offset || changes.Count == request.Limit)) return;
             static string? Hash(string? text) => text is null ? null : ProjectService.Hash(Encoding.UTF8.GetBytes(text));
             static string? Snip(string? text) => text is { Length: > 4096 } ? text[..4096] : text;
-            changes.Add(new((b ?? a)!.Name.LocalName, path, a is null ? "added" : b is null ? "removed" : "modified",
+            changes.Add(new(kind, path, change,
                 a is null ? null : XmlProjects.PathOf(a), b is null ? null : XmlProjects.PathOf(b), Hash(before), Hash(after),
                 Snip(before), Snip(after), before?.Length > 4096, after?.Length > 4096));
         }
         void Walk(XElement? a, XElement? b, string path)
         {
-            if (a is null || b is null || a.Name != b.Name) { Add(a, b, path); return; }
+            if (a is null || b is null) { if (a is not null || b is not null) Add(a, b, path); return; }
+            if (a.Name != b.Name) { Add(a, b, path); return; }
             if (a.Name == "RLLContent")
             {
+                if (XNode.DeepEquals(a, b)) return;
                 Add(a, b, path + "/@metadata", true);
                 var oldRungs = a.Elements().ToArray(); var newRungs = b.Elements().ToArray();
                 if (oldRungs.Any(e => e.Name != "Rung") || newRungs.Any(e => e.Name != "Rung"))
@@ -80,15 +99,27 @@ public static class ProjectComparison
                 Walk(oldChild, newChild, path + "/" + key);
             }
         }
-        Walk(leftDocument.Root, rightDocument.Root, "/RSLogix5000Content");
-        var selected = changes.Where(c => string.IsNullOrEmpty(request.Query) ||
-            c.Path.Contains(request.Query, StringComparison.OrdinalIgnoreCase) || c.Kind.Contains(request.Query, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (allMatches && selected.Length > ComparisonReviews.MaximumChanges)
-            throw new OperationException("comparison_review_limit", "A review supports up to 5000 matching changes; narrow the comparison filter.");
-        var result = new ProjectComparisonReport(left, right, changes.Count, selected.Length,
-            changes.Count(c => c.Change == "added"), changes.Count(c => c.Change == "removed"), changes.Count(c => c.Change == "modified"),
-            request.Offset, allMatches ? selected.Length : request.Limit, allMatches ? selected : selected.Skip(request.Offset).Take(request.Limit).ToArray(),
-            "Structural XML comparison only. Attribute order/formatting indentation and root ExportDate/Controller LastModifiedDate are ignored; scalar text, stored values, UDT member/AOI parameter order and unknown component XML remain significant. Rung numbers are optional. LCS aligns rung occurrences; moves are not inferred. No native semantic equivalence or runtime validation.");
+        const string root = "/RSLogix5000Content";
+        if (request.ProgramName is { } programName)
+        {
+            XElement? SelectScope(XDocument doc)
+            {
+                var program = doc.Root!.Element("Controller")!.Elements("Programs").Elements("Program")
+                    .SingleOrDefault(p => LogicContext.Same((string?)p.Attribute("Name"), programName));
+                return request.RoutineName is { } routineName
+                    ? program?.Elements("Routines").Elements("Routine").SingleOrDefault(r => LogicContext.Same((string?)r.Attribute("Name"), routineName))
+                    : program;
+            }
+            var a = SelectScope(leftDocument); var b = SelectScope(rightDocument);
+            if (a is null && b is null) throw new OperationException("comparison_scope_missing", "The selected program or routine is absent from both snapshots.");
+            var path = root + "/Controller[1]/Programs[1]/Program[" + programName + "]";
+            if (request.RoutineName is { } routineName) path += "/Routines[1]/Routine[" + routineName + "]";
+            Walk(a, b, path);
+        }
+        else Walk(leftDocument.Root, rightDocument.Root, root);
+        var result = new ProjectComparisonReport(left, right, addedCount + removedCount + modifiedCount, filteredCount,
+            addedCount, removedCount, modifiedCount, request.Offset, allMatches ? filteredCount : request.Limit, changes.ToArray(),
+            "Structural XML comparison only. Counts cover the selected program/routine or the entire project when unscoped. Attribute order/formatting indentation and root ExportDate/Controller LastModifiedDate are ignored; scalar text, stored values, UDT member/AOI parameter order and unknown component XML remain significant. Rung numbers are optional. LCS aligns rung occurrences; moves are not inferred. No native semantic equivalence or runtime validation.");
         if (!allMatches && JsonSerializer.SerializeToUtf8Bytes(result, ProjectService.Json).Length > 4 * 1024 * 1024)
             throw new OperationException("comparison_page_too_large", "Comparison page exceeds 4 MiB; request a smaller limit.");
         return result;
@@ -97,10 +128,12 @@ public static class ProjectComparison
     private static Dictionary<string, XElement> Children(XElement parent)
     {
         var result = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+        var ordinals = new Dictionary<XName, int>();
         foreach (var child in parent.Elements())
         {
+            var ordinal = ordinals[child.Name] = ordinals.GetValueOrDefault(child.Name) + 1;
             var identity = child.Name == "Controller" ? null : (string?)child.Attribute("Name") ?? (string?)child.Attribute("OnlineEditType");
-            var key = child.Name + (identity is not null ? "[" + identity + "]" : "[" + (child.ElementsBeforeSelf(child.Name).Count() + 1) + "]");
+            var key = child.Name + (identity is not null ? "[" + identity + "]" : "[" + ordinal + "]");
             if (!result.TryAdd(key, child)) throw new OperationException("ambiguous_comparison", "Duplicate child identities prevent structural comparison.");
         }
         return result;
@@ -123,12 +156,30 @@ public static class ProjectComparison
         return result;
     }
 
-    internal static void ValidateSize(XDocument document)
+    internal static bool Matches(string? query, string path, string kind) => string.IsNullOrEmpty(query) ||
+        path.Contains(query, StringComparison.OrdinalIgnoreCase) || kind.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    internal static void ValidateScope(ProjectCompareRequest request)
     {
-        var count = 0;
+        if (request.ProgramName is not null) WatchValidation.Identifier(request.ProgramName);
+        if (request.RoutineName is not null)
+        {
+            if (request.ProgramName is null) throw new OperationException("comparison_scope", "A routine selector requires its program name.");
+            WatchValidation.Identifier(request.RoutineName);
+        }
+    }
+
+    internal static void ValidateSize(XDocument document, int maximumElements = 100_000)
+    {
+        var count = 0; var depth = -1;
+        XElement? previous = null;
         foreach (var element in document.Descendants())
-            if (++count > 100000 || element.Ancestors().Take(65).Count() > 64)
-                throw new OperationException("comparison_limit", "Comparison supports 100000 XML elements and 64 nesting levels per project.");
+        {
+            while (previous != element.Parent) { previous = previous!.Parent; depth--; }
+            if (++count > maximumElements || ++depth > 64)
+                throw new OperationException("comparison_limit", $"Comparison supports {maximumElements} XML elements and 64 nesting levels per project.");
+            previous = element;
+        }
     }
 
     internal static List<(int Left, int Right)> Align(string[] left, string[] right)

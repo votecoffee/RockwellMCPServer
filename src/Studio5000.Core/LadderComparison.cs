@@ -89,18 +89,25 @@ public sealed partial class ProjectService
 {
     private (ProjectInfo Left, XDocument A, ProjectInfo Right, XDocument B) ComparisonDocuments(string leftId, string leftHash, string rightId, string rightHash)
     {
-        var left = Get(leftId); var right = Get(rightId); Expect(left, leftHash); Expect(right, rightHash);
-        if (left.Kind != "logix" || right.Kind != "logix") throw new OperationException("not_logix", "Select Logix snapshots.");
-        var a = XmlProjects.Parse(File.ReadAllBytes(RevisionFile(left.Id, left.Revision))); var b = XmlProjects.Parse(File.ReadAllBytes(RevisionFile(right.Id, right.Revision)));
-        ProjectComparison.ValidateSize(a); ProjectComparison.ValidateSize(b); return (left, a, right, b);
+        var (left, a) = ReadBoundedLogixRevision(leftId, leftHash);
+        var (right, b) = ReadBoundedLogixRevision(rightId, rightHash);
+        return (left, XmlProjects.ParseForAnalysis(a), right, XmlProjects.ParseForAnalysis(b));
     }
     public ComparedRoutinesReport CompareRoutines(ProjectCompareRequest request)
     {
         if (request.Offset is < 0 or > 100000 || request.Limit is < 1 or > 200 || request.Query?.Length > 256) throw new OperationException("invalid_comparison", "Use offset 0..100000, limit 1..200 and query up to 256 characters.");
         var (left, a, right, b) = ComparisonDocuments(request.LeftProjectId, request.LeftSha256, request.RightProjectId, request.RightSha256);
-        var rows = LadderComparison.Routines(a, b).Select(pair => LadderComparison.Describe(pair.Left, pair.Right, request.IncludeRungNumbers))
-            .Where(r => string.IsNullOrEmpty(request.Query) || (r.Owner + "/" + r.Name).Contains(request.Query, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return new(left, right, rows.Length, request.Offset, rows.Skip(request.Offset).Take(request.Limit).ToArray());
+        ProjectComparison.ValidateScope(request);
+        var pairs = LadderComparison.Routines(a, b).Where(pair =>
+        {
+            var node = (pair.Right ?? pair.Left)!;
+            var owner = LadderComparison.Owner(node); var name = (string?)node.Attribute("Name");
+            return (request.ProgramName is null || LogicContext.Same(owner, "Program:" + request.ProgramName)) &&
+                (request.RoutineName is null || LogicContext.Same(name, request.RoutineName)) &&
+                (string.IsNullOrEmpty(request.Query) || (owner + "/" + name).Contains(request.Query, StringComparison.OrdinalIgnoreCase));
+        }).ToArray();
+        return new(left, right, pairs.Length, request.Offset, pairs.Skip(request.Offset).Take(request.Limit)
+            .Select(pair => LadderComparison.Describe(pair.Left, pair.Right, request.IncludeRungNumbers)).ToArray());
     }
     public LadderComparisonReport CompareLadder(LadderCompareRequest request)
     {

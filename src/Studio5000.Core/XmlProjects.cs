@@ -16,14 +16,24 @@ public static class XmlProjects
     private static readonly HashSet<string> DeclarationContainers =
         ["Tags", "LocalTags", "Routines", "Programs", "DataTypes", "AddOnInstructionDefinitions", "Modules", "Tasks", "Members", "Parameters"];
     public static XDocument Parse(byte[] bytes) => Parse(bytes, false);
+    internal static XDocument ParseForAnalysis(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = XmlReader.Create(stream, ReaderSettings());
+        var count = 0;
+        while (reader.Read())
+            if (reader.NodeType == XmlNodeType.Element && (++count > ProjectComparison.MaximumAnalysisElements || reader.Depth > 64))
+                throw new OperationException("comparison_limit", "Analysis supports 1000000 XML elements and 64 nesting levels per project.");
+        return Parse(bytes);
+    }
+    private static XmlReaderSettings ReaderSettings() => new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 64 * 1024 * 1024
+    };
     private static XDocument Parse(byte[] bytes, bool tracked)
     {
         using var stream = new MemoryStream(bytes);
-        using var reader = XmlReader.Create(stream, new XmlReaderSettings
-        {
-            DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null,
-            MaxCharactersInDocument = 64 * 1024 * 1024
-        });
+        using var reader = XmlReader.Create(stream, ReaderSettings());
         var doc = XDocument.Load(reader, LoadOptions.PreserveWhitespace | (tracked ? LoadOptions.SetLineInfo : LoadOptions.None));
         Validate(doc);
         return doc;
