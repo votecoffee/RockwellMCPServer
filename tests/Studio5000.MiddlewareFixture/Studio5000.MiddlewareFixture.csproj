@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Studio5000.Core/Studio5000.Core.csproj" />
+    <Compile Include="../../src/Studio5000.EngineeringCli/OwnedCommand.cs" Link="OwnedCommand.cs" />
+  </ItemGroup>
+</Project>

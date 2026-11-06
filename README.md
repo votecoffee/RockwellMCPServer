@@ -95,6 +95,8 @@ Exploded ZIPs use legacy schema 1. Newer layouts, protected AOIs and structured-
 
 ## Install
 
+For a standalone Windows file workflow, publish the on-demand engineering CLI with the .NET 8 SDK. It can summarize saved L5X exports without the desktop service. The separately published MCP adapter is optional. [CLI and adapter setup](docs/ENGINEERING_MIDDLEWARE.md)
+
 ### Dependencies
 
 - Windows and the [.NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0), including desktop and ASP.NET Core runtimes.
