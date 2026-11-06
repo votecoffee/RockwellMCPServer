@@ -52,10 +52,13 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     private static ResourceRecord ReadRecord(string path, string id)
     {
         ProjectService.RejectLinks(path);
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var bytes = new byte[32769]; var length = 0;
-        while (length < bytes.Length && file.Read(bytes, length, bytes.Length - length) is var count && count != 0) length += count;
-        var record = ResourceJson.Read(bytes.AsMemory(0, length));
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+        var length = file.Length;
+        if (length > ResourceJson.MaximumRecordBytes) throw new ArgumentException("Resource record exceeds 32 KiB.");
+        var bytes = new byte[(int)length];
+        file.ReadExactly(bytes);
+        if (file.ReadByte() != -1) throw new IOException("Resource record grew while being read.");
+        var record = ResourceJson.Read(bytes);
         if (record.ResourceId != id) throw new ArgumentException("Resource identity differs from its filename.");
         return record;
     }
@@ -124,7 +127,7 @@ public sealed class ResourceLedger(string registry, IResourceProcessDriver drive
     internal void Save(ResourceRecord record)
     {
         var bytes = ResourceJson.Write(record);
-        if (bytes.Length > 32768) throw new ArgumentException("Resource record exceeds 32 KiB.");
+        if (bytes.Length > ResourceJson.MaximumRecordBytes) throw new ArgumentException("Resource record exceeds 32 KiB.");
         var path = RecordPath(record.ResourceId);
         if (File.Exists(RetainedPath(path))) throw new InvalidOperationException("The resource identity belongs to retained history.");
         var temp = Path.Combine(DirectoryPath, ".resource-" + Guid.NewGuid().ToString("N"));

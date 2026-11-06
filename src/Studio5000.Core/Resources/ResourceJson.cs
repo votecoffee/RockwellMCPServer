@@ -10,12 +10,13 @@ namespace Studio5000.Core.Resources;
 // whose optional defaults/identity normalization differ from the runtime model.
 public static class ResourceJson
 {
+    internal const int MaximumRecordBytes = 32 * 1024;
     private static readonly JsonSerializerOptions Wire = new() { MaxDepth = 32 };
     private static readonly string[] Required = ["schema_version", "resource_id", "app_id", "owner_id", "owner", "label", "ownership", "state", "created_at", "updated_at"];
     public static byte[] Write(ResourceRecord record) => Encoding.UTF8.GetBytes(Canonical(JsonSerializer.SerializeToElement(record.Normalize(), Wire)) + "\n");
     public static ResourceRecord Read(ReadOnlyMemory<byte> bytes)
     {
-        if (bytes.Length > 32768) throw new ArgumentException("Resource record exceeds 32 KiB.");
+        if (bytes.Length > MaximumRecordBytes) throw new ArgumentException("Resource record exceeds 32 KiB.");
         using var document = JsonDocument.Parse(bytes, new() { MaxDepth = 32 });
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object || Required.Any(k => !root.TryGetProperty(k, out _))) throw new ArgumentException("Missing required resource field.");

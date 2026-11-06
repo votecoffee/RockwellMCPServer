@@ -43,6 +43,19 @@ public sealed class ResourceLedgerTests : IDisposable
         return (ledger, owner, owner.BindProcess(intent.ResourceId, 100));
     }
     [Fact]
+    public void Record_file_allows_the_exact_byte_limit_and_rejects_one_extra_byte()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (ledger, _, record) = Bound();
+        var path = Path.Combine(ledger.DirectoryPath, record.ResourceId + ".json");
+        var json = Encoding.UTF8.GetString(ResourceJson.Write(record));
+        File.WriteAllBytes(path, Encoding.UTF8.GetBytes(json.PadRight(32 * 1024)));
+        Assert.Equal(record.Revision, ledger.Get(record.ResourceId).Revision);
+        File.WriteAllBytes(path, Encoding.UTF8.GetBytes(json.PadRight(32 * 1024 + 1)));
+        Assert.Throws<ArgumentException>(() => ledger.Get(record.ResourceId));
+    }
+
+    [Fact]
     public void Model_normalizes_identity_defaults_unicode_and_python_float_tokens()
     {
         var record = new ResourceRecord { ResourceId = new('b', 32), AppId = "rockwell-fixture", OwnerId = new('c', 32),
