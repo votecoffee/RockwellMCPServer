@@ -61,7 +61,7 @@ internal static class WorkspaceRun
             using var service = new ProjectService(options, sdkServiceMaintenanceHeld: () =>
                 File.Exists(Path.Combine(EngineeringCli.StateRoot, "maintenance-hold.json")) ||
                 File.Exists(Path.Combine(workspace, "maintenance-hold.json")),
-                sdkServiceReceiptDirectory: SdkServiceDirectory);
+                sdkServiceReceiptDirectory: SdkServiceDirectory, reportWorkspaceBusy: true);
             using var transport = new LocalOperations.Transport(service, job, request.AllowNative, request.Steps is not null);
             if (request.AllowNative) holds = AcquireHolds(workspace, request, options, job);
             try

@@ -16,7 +16,7 @@ Prefer an immutable `source_snapshot` from an evidence packet over a path that m
 
 ## Discover, preview and review
 
-Use `studio_extensions_catalog`, then `studio_extensions_describe` for `studio_logic_value_merge_preview`, `studio_logic_value_merge_apply` and `studio_validation_profiles`. Pin their current generation and use their declared effect channels.
+In the standalone CLI, use `operation-help studio_logic_value_merge_preview`, `operation-help studio_logic_value_merge_apply` and `operation-help studio_validation_preview` to check the installed schemas. For the extension host, discover and describe the same operations, then use their declared effect channels and pin the current generation.
 
 The preview request uses `mode: "preserve-fresh"`:
 
@@ -43,6 +43,20 @@ If reviewed MESSAGE configuration changed, inspect each field's baseline/logic/f
 
 `programName` selects a program-local MESSAGE tag; omit it for controller scope. `logic` takes that attribute from the pinned reviewed input; `fresh` explicitly retains it. No field value is invented. Other MESSAGE fields, including saved runtime fields, stay fresh. Re-preview after every choice change.
 
+To add declarations, first review the blocked preview's named additions. Approve each new tag in its exact scope and each new UDT by name, including all transitive new dependencies.
+
+```json
+{
+  "tagAdditions": [
+    {"tagName": "NewCounter", "startupValues": "native-default"},
+    {"tagName": "NewRecords", "programName": "ExampleProgram", "startupValues": "reviewed-logic"}
+  ],
+  "dataTypeAdditions": ["RecordType", "NestedMemberType"]
+}
+```
+
+Use `reviewed-logic` to copy every explicit saved startup representation from the reviewed tag. The receipt lists format, byte count, SHA-256 and a bounded preview. Use `native-default` only when the reviewed tag contains no `Data` and the absence of a saved startup value is intentional. The receipt lists UDTs in dependency order, independent of the order of approval. Existing names and layouts remain protected, including local additions that would shadow a controller tag. Use a separate workflow for alias, safety, produced/consumed, forced or MESSAGE tag additions.
+
 Review `findings`, `conflicts`, `preservation`, `policySha256` and `reviewSha256`. The receipt counts tags, every representation, representation differences from the reviewed copy, routine replacements/additions/removals and applied MESSAGE fields. `canApply` must be true. Type/array/alias/UDT/AOI layout conflicts, safety routine edits, program identities and reviewed non-routine configuration changes are not silently resolved. Reviewed tag descriptions remain fresh in this profile too. Do not use a broad MESSAGE replacement or tag-value resolution to bypass a layout/configuration conflict.
 
 Budget: UTF-8 L5X, 64 MiB and 1,000,000 XML elements per input, 64 nesting levels, 10,000 findings and 256 MESSAGE field choices. Untouched source bytes, CDATA and line endings survive lexical edits. This is separate from legacy `mode: "three-way"`, which transfers up to 256 selected compatible standard base-tag values into modified logic and may remove competing destination representations. The legacy mode is not the whole-project current-values workflow.
@@ -50,6 +64,8 @@ Budget: UTF-8 L5X, 64 MiB and 1,000,000 XML elements per input, 64 nesting level
 ## Apply once to a separate managed project
 
 Pass the identical preview request and its exact `expectedReviewSha256` to `studio_logic_value_merge_apply` through the apply channel. It rechecks all pinned inputs and creates a new managed project. The three originals stay unchanged. Retain the result ID/hash. A lost response is not permission to replay; inspect managed projects/audit evidence before a deliberate retry.
+
+For a policy with declaration additions, run `studio_validation_preview` with `profile: "merge-preservation"`, the candidate, the identical merge policy and `expectedPolicySha256`. Its `exact-merge-bytes` check rebuilds the approved lexical patch and compares the entire saved result SHA-256. The check covers existing representations, configuration and addresses, new startup bytes and all unselected bytes. Use `native-readback` separately when an operator supplies a native re-export that may have different formatting.
 
 ## Validate the expected change policy
 

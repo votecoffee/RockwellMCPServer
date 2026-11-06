@@ -82,6 +82,22 @@ internal sealed class LogixLexicalDocument
         throw new OperationException("merge_span", "Invalid source span.");
     }
     public string Raw(XElement element) { var span = Locate(element); return Text[span.Start..span.End]; }
+    public Patch InsertChildren(XElement owner, string name, string children, params string[] following)
+    {
+        var container = owner.Element(name);
+        if (container is null)
+        {
+            var span = Locate(owner);
+            if (span.Empty) throw new OperationException("merge_span", "An empty owner requires a separate structural edit.");
+            var next = owner.Elements().FirstOrDefault(e => following.Contains(e.Name.LocalName));
+            var offset = next is null ? span.CloseStart : Locate(next).Start;
+            return new(offset, offset, "<" + name + ">" + children + "</" + name + ">");
+        }
+        var section = Locate(container);
+        return section.Empty
+            ? new(section.Start, section.End, Text[section.Start..(section.OpenEnd - 2)] + ">" + children + "</" + name + ">")
+            : new(section.CloseStart, section.CloseStart, children);
+    }
     public byte[] Apply(IEnumerable<Patch> source)
     {
         var patches = source.OrderBy(p => p.Start).ToArray(); var previous = 0;

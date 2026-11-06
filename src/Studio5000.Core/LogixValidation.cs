@@ -26,7 +26,7 @@ internal static class LogixValidation
     {
         schemaVersion = 1, toolVersion = WorkspaceIdentity.Version,
         profiles = new[] {
-            new { id = "merge-preservation", purpose = "Validate reviewed logic while keeping all current saved values and configuration; exact MESSAGE exceptions only.", requires = "candidate + preserve-fresh merge policy + expectedPolicySha256", checks = new[]{"reviewed-program-routines-and-annotations","fresh-tag-identities-definitions-aliases","all-stored-representations","message-field-exceptions","untouched-module-task-safety-AOI-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck, AoiArgumentLinkage.CheckName, LogixMemberMetadata.CheckName} },
+            new { id = "merge-preservation", purpose = "Validate reviewed logic while keeping all fresh saved values and configuration outside approved patches. Declaration-addition policies also require exact saved candidate bytes.", requires = "candidate + preserve-fresh merge policy + expectedPolicySha256", checks = new[]{"reviewed-program-routines-and-annotations","fresh-tag-identities-definitions-aliases","all-stored-representations","message-field-exceptions","untouched-module-task-safety-AOI-configuration","exact-merge-bytes","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck, AoiArgumentLinkage.CheckName, LogixMemberMetadata.CheckName} },
             new { id = "native-readback", purpose = "Compare an already supplied native export/readback with its intended saved project, without running native jobs.", requires = "candidate readback + reference intended project; optional explicit nativeRules", checks = new[]{"program-and-readable-AOI-routines","tag-definitions-aliases-and-all-representations","message-configuration","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck, AoiArgumentLinkage.CheckName, LogixMemberMetadata.CheckName} },
             new { id = "legacy-review-readback", purpose = "Review-only v35-to-v32 comparison: keep application/readable AOI code and ordinary values; report motion configuration and protected AOI envelopes/payloads separately.", requires = "candidate native v32 readback + reference intended v35 project; optional explicit nativeRules and exact expected metadata/configuration differences", checks = new[]{"target-software-controller-Local-revisions","readable-routine-code","ordinary-tag-layouts-and-values","motion-configuration","protected-AOI-envelope-and-complete-opaque-payload","other-configuration","direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck, AoiArgumentLinkage.CheckName, LogixMemberMetadata.CheckName} },
             new { id = "offline-integrity", purpose = "Check complex UDT member radix metadata, RLL branch grammar, documented native nesting depth, duplicate series predicates and direct routine references. Grammar/depth/AOI linkage failures remain blocking when inherited; predicate warnings are nonblocking. Static AOI arguments resolve in caller scope, including aliases, declared UDT members and optional layouts.", requires = "candidate; optional baseline", checks = new[]{"direct-RLL-JSR-and-main-routine-references", LadderBranchGrammar.CheckName, LadderPreflight.DepthCheck, LadderPreflight.DuplicateCheck, AoiArgumentLinkage.CheckName, LogixMemberMetadata.CheckName} }
@@ -189,7 +189,7 @@ internal static class LogixValidation
         return (compared, findings);
     }
     public static LogixValidationReport Run(LogixValidationRequest request, ProjectInfo candidate, XDocument actual,
-        ProjectInfo? reference, XDocument? expected, XDocument? reviewed, XDocument? baseline)
+        ProjectInfo? reference, XDocument? expected, XDocument? reviewed, XDocument? baseline, LogixValidationFinding? exactMerge = null)
     {
         if (request.Profile is not ("merge-preservation" or "native-readback" or "legacy-review-readback" or "offline-integrity")) throw new OperationException("validation_profile", "Discover a named validation profile first.");
         var legacy = request.Profile == "legacy-review-readback"; var nativeComparison = request.Profile == "native-readback" || legacy;
@@ -206,6 +206,7 @@ internal static class LogixValidation
             throw new OperationException("validation_policy", "Legacy review cannot waive target revisions, code, ordinary tag layouts/values or UDT/AOI layouts as metadata/configuration exceptions.");
         var findings = new List<LogixValidationFinding>(); var counts = new Dictionary<string, int>();
         void Count(string check) => counts[check] = counts.GetValueOrDefault(check) + 1;
+        if (exactMerge is not null) { Count(exactMerge.Check); findings.Add(exactMerge); }
         void Fail(string check, string location, string detail, XElement? a, XElement? b) => findings.Add(new(check, location, "fail", "new", detail, Hash(a), Hash(b)));
         if (legacy)
         {
@@ -434,19 +435,34 @@ public sealed partial class ProjectService
             throw new OperationException("validation_policy", "Select an explicit candidate and only the input roles used by the chosen profile.");
         (ProjectInfo Info, XDocument Doc) Load(MergeSnapshot input)
         { var p = PreservationSource(input); var doc = XmlProjects.Parse(p.Bytes); LogixLexicalDocument.ValidateBudget(doc); return (p.Project, doc); }
-        var candidate = Load(request.Candidate); ProjectInfo? reference = null; XDocument? expected = null; XDocument? reviewed = null; XDocument? baseline = null;
+        ProjectInfo? reference = null; XDocument? expected = null; XDocument? reviewed = null; XDocument? baseline = null;
+        LogixValidationFinding? exactMerge = null;
         if (request.Profile == "merge-preservation")
         {
             var merge = request.Merge ?? throw new OperationException("validation_policy", "Provide the reviewed preserve-fresh merge policy.");
             if (merge.Mode != "preserve-fresh" || merge.Tags is not null || merge.Resolutions is { Length: > 0 }) throw new OperationException("validation_policy", "Use the whole-project preserve-fresh policy.");
             if (!string.Equals(request.ExpectedPolicySha256, LogixPreservation.PolicyHash(merge), StringComparison.OrdinalIgnoreCase)) throw new OperationException("stale_revision", "Review the merge policy hash before validation.");
             LogixPreservation.ValidateChoices(merge.ConfigurationFields ?? []);
-            var fresh = Load(merge.Values); reference = fresh.Info; expected = fresh.Doc; reviewed = Load(merge.Logic).Doc; baseline = Load(merge.Baseline).Doc;
+            if (merge.HasDeclarationAdditions)
+            {
+                var report = BuildFreshPreservationMerge(merge).Report;
+                if (!report.CanApply) throw new OperationException("merge_blocked", "The reviewed declaration-addition policy has unresolved conflicts.");
+                var match = string.Equals(report.ResultSha256, request.Candidate.Sha256, StringComparison.OrdinalIgnoreCase);
+                exactMerge = new("exact-merge-bytes", "/RSLogix5000Content", match ? "pass" : "fail", "new",
+                    "Rebuilt the approved lexical patch from the pinned inputs and compared the entire saved candidate hash. This covers existing values/configuration, new declaration/startup bytes and every unselected byte.",
+                    report.ResultSha256, request.Candidate.Sha256);
+                var fresh = Load(merge.Values); reference = fresh.Info; baseline = fresh.Doc;
+            }
+            else
+            {
+                var fresh = Load(merge.Values); reference = fresh.Info; expected = fresh.Doc; reviewed = Load(merge.Logic).Doc; baseline = Load(merge.Baseline).Doc;
+            }
         }
         else if (request.Profile is "native-readback" or "legacy-review-readback")
         { var original = Load(request.Reference ?? throw new OperationException("validation_policy", "Provide the intended saved project as reference.")); reference = original.Info; expected = original.Doc; baseline = request.Baseline is null ? original.Doc : Load(request.Baseline).Doc; }
         else if (request.Baseline is not null) baseline = Load(request.Baseline).Doc;
-        return LogixValidation.Run(request, candidate.Info, candidate.Doc, reference, expected, reviewed, baseline);
+        var candidate = Load(request.Candidate);
+        return LogixValidation.Run(request, candidate.Info, candidate.Doc, reference, expected, reviewed, baseline, exactMerge);
     }
     public async Task<LogixValidationReport> PreviewLogixValidationAsync(LogixValidationRequest request, CancellationToken ct = default)
     { await gate.WaitAsync(ct); try { return BuildLogixValidation(request); } finally { gate.Release(); } }

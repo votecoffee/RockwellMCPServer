@@ -27,7 +27,7 @@ public sealed partial class ProjectService : IDisposable
     private static ReaderWriterLockSlim StateFileGate(string path) => stateFileGates[(int)((uint)StringComparer.OrdinalIgnoreCase.GetHashCode(Path.GetFullPath(path)) % (uint)stateFileGates.Length)];
 
     public ProjectService(ServiceOptions options, IWatchSessionFactory? watchFactory = null, ISdkServiceDriver? sdkServiceDriver = null,
-        Func<bool>? sdkServiceMaintenanceHeld = null, string? sdkServiceReceiptDirectory = null)
+        Func<bool>? sdkServiceMaintenanceHeld = null, string? sdkServiceReceiptDirectory = null, bool reportWorkspaceBusy = false)
     {
         this.options = options;
         NativeExecutionPolicy.ValidateOptions(options);
@@ -48,7 +48,7 @@ public sealed partial class ProjectService : IDisposable
         Directory.CreateDirectory(state);
         RejectLinks(state);
         try { instanceLock = new FileStream(Path.Combine(state, "service.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33)
+        catch (IOException ex) when (reportWorkspaceBusy && (ex.HResult & 0xffff) is 32 or 33)
         {
             gate.Dispose();
             throw new OperationException("workspace_busy", "Another process owns this workspace. Wait for it to finish before submitting another request with the same workspace name.");

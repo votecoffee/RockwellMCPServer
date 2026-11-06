@@ -40,6 +40,85 @@ public sealed class LogixPreservationTests : IDisposable
     private async Task<(ProjectInfo A, ProjectInfo B, ProjectInfo C)> Inputs(string code = "XIC(Scalar)NOP();") => (await Register(Document()), await Register(Document(code: code, remote: "Reviewed")), await Register(Document(41, remote: "Current"), true));
 
     [Fact]
+    public async Task Approved_nested_array_and_scoped_tags_preserve_the_complete_fresh_preimage()
+    {
+        const string inner = """<DataType Name="InnerRecord" Family="NoFamily" Class="User"><Members><Member Name="Enabled" DataType="BOOL" Dimension="0" Radix="Decimal" /></Members></DataType>""";
+        const string outer = """<DataType Name="OuterRecord" Family="NoFamily" Class="User"><Members><Member Name="Inner" DataType="InnerRecord" Dimension="0" Radix="NullType" /></Members></DataType>""";
+        const string array = """
+            <Tag Name="NewArray" TagType="Base" DataType="OuterRecord" Dimensions="2">
+              <Data Format="L5K"><![CDATA[[[[1]],[[0]]]]]></Data>
+              <Data Format="Decorated"><Array DataType="OuterRecord" Dimensions="2">
+                <Element Index="[0]"><Structure DataType="OuterRecord"><StructureMember Name="Inner" DataType="InnerRecord"><DataValueMember Name="Enabled" DataType="BOOL" Value="1" /></StructureMember></Structure></Element>
+                <Element Index="[1]"><Structure DataType="OuterRecord"><StructureMember Name="Inner" DataType="InnerRecord"><DataValueMember Name="Enabled" DataType="BOOL" Value="0" /></StructureMember></Structure></Element>
+              </Array></Data>
+            </Tag>
+            """;
+        const string global = """<Tag Name="NewGlobal" TagType="Base" DataType="DINT" />""";
+        static XDocument Source(int value)
+        {
+            var doc = Document(value);
+            Tag(doc, "Scalar").Add(new XElement("Data", new XAttribute("Format", "NativeCustom"), new XCData($"  untouched {value}  ")));
+            return doc;
+        }
+        var before = Source(1);
+        var reviewed = Source(1);
+        reviewed.Descendants("DataTypes").Single().Add(XElement.Parse(outer), XElement.Parse(inner));
+        Program(reviewed).Element("Tags")!.Add(XElement.Parse(array, LoadOptions.PreserveWhitespace));
+        reviewed.Root!.Element("Controller")!.Element("Tags")!.Add(XElement.Parse(global));
+        var fresh = Source(41);
+        var targetModule = fresh.Descendants("Module").Single();
+        targetModule.Add(new XElement("Ports", new XElement("Port", new XAttribute("Address", "192.0.2.5"))));
+        fresh.Descendants("Task").Single().SetAttributeValue("Rate", "22");
+        var a = await Register(before); var b = await Register(reviewed); var c = await Register(fresh, true);
+        var policy = Policy(a, b, c);
+        var unapproved = await service.PreviewLogicValueMergeAsync(policy);
+        Assert.False(unapproved.CanApply);
+        Assert.Contains(unapproved.Findings!, f => f.Kind == "tag-addition" && f.Location == "Program/DemoProgram/NewArray");
+        var approved = policy with { TagAdditions = [new("NewGlobal", "native-default"), new("NewArray", "reviewed-logic", "DemoProgram")], DataTypeAdditions = ["OuterRecord", "InnerRecord"] };
+        var missing = await service.PreviewLogicValueMergeAsync(approved with { DataTypeAdditions = ["OuterRecord"] });
+        Assert.False(missing.CanApply);
+        Assert.Contains(missing.Findings!, f => f.Kind == "data-type-closure" && f.Location == "InnerRecord");
+        var preview = await service.PreviewLogicValueMergeAsync(approved);
+        Assert.True(preview.CanApply, string.Join("\n", preview.Conflicts));
+        Assert.Equal(new[] { "InnerRecord", "OuterRecord" }, preview.Preservation!.AddedDataTypes!.Select(t => t.Name));
+        var startup = preview.Preservation.AddedTags!.Single(t => t.TagName == "NewArray");
+        Assert.Equal(new[] { "L5K", "Decorated" }, startup.Data.Select(d => d.Format));
+        var result = await service.ApplyLogicValueMergeAsync(new(approved, preview.ReviewSha256));
+        var path = Path.Combine(root, "state", "projects", result.Id, "revision-0.l5x");
+        var expected = Encoding.UTF8.GetString(File.ReadAllBytes(c.SourcePath));
+        var source = Encoding.UTF8.GetString(File.ReadAllBytes(b.SourcePath));
+        string Raw(string start, string end)
+        {
+            var index = source.IndexOf(start, StringComparison.Ordinal);
+            return source[index..(source.IndexOf(end, index, StringComparison.Ordinal) + end.Length)];
+        }
+        expected = expected.Replace("<DataTypes />", "<DataTypes >" + Raw("<DataType Name=\"InnerRecord\"", "</DataType>") +
+            Raw("<DataType Name=\"OuterRecord\"", "</DataType>") + "</DataTypes>", StringComparison.Ordinal)
+            .Replace("</Tags><Programs>", Raw("<Tag Name=\"NewGlobal\"", "/>") + "</Tags><Programs>", StringComparison.Ordinal)
+            .Replace("<Tags />", "<Tags >" + Raw("<Tag Name=\"NewArray\"", "</Tag>") + "</Tags>", StringComparison.Ordinal);
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), File.ReadAllBytes(path));
+        Assert.Equal(preview.ResultSha256, result.CurrentSha256);
+        var readback = new LogixValidationRequest("merge-preservation", Snapshot(result), Merge: approved, ExpectedPolicySha256: preview.PolicySha256);
+        Assert.Contains((await service.PreviewLogixValidationAsync(readback)).Checks, c => c.Name == "exact-merge-bytes" && c.Status == "pass");
+        var tampered = Path.Combine(root, "tampered.L5X");
+        File.WriteAllBytes(tampered, Encoding.UTF8.GetBytes(expected.Replace("untouched 41", "untouched 99", StringComparison.Ordinal)));
+        var drift = await service.RegisterAsync(tampered);
+        Assert.Contains((await service.PreviewLogixValidationAsync(readback with { Candidate = Snapshot(drift) })).Checks,
+            c => c.Name == "exact-merge-bytes" && c.Status == "fail");
+        fresh.Root!.Element("Controller")!.Element("Tags")!.Add(XElement.Parse(global));
+        var collision = await Register(fresh);
+        var blocked = await service.PreviewLogicValueMergeAsync(approved with { Values = Snapshot(collision) });
+        Assert.Contains(blocked.Findings!, f => f.Kind == "tag-addition" && f.Location == "Controller/NewGlobal" && f.Status == "conflict");
+        reviewed.Descendants("DataTypes").Single().Add(XElement.Parse("""<DataType Name="Existing"><Members><Member Name="Size" DataType="DINT" Dimension="0" Radix="Decimal" /></Members></DataType>"""));
+        before.Descendants("DataTypes").Single().Add(XElement.Parse("""<DataType Name="Existing"><Members><Member Name="Size" DataType="INT" Dimension="0" Radix="Decimal" /></Members></DataType>"""));
+        var oldWithType = await Register(before); var changedType = await Register(reviewed);
+        blocked = await service.PreviewLogicValueMergeAsync(approved with
+            { Baseline = Snapshot(oldWithType), Values = Snapshot(oldWithType), Logic = Snapshot(changedType) });
+        Assert.False(blocked.CanApply);
+        Assert.Contains(blocked.Findings!, f => f.Kind == "data-type-contract" && f.Location == "Existing" && f.Status == "unsupported");
+    }
+
+    [Fact]
     public async Task Preserves_both_saved_representations_and_only_explicit_MESSAGE_fields()
     {
         var (a, b, _) = await Inputs("CPS(\"literal </Routine> >\",Scalar,1);");

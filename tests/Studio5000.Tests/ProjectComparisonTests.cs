@@ -124,10 +124,16 @@ public sealed class ProjectComparisonTests : IDisposable
             var doc = XDocument.Parse(Xml);
             doc.Descendants("RLLContent").Single().ReplaceNodes(Enumerable.Range(0, 1100).Select(i =>
                 new XElement("Rung", new XAttribute("Number", i), new XAttribute("Type", "N"), new XElement("Text", $"XIC({operand}{i})OTE(Out);"))));
+            doc.Descendants("Program").Single().Element("Routines")!.Add(new XElement("Routine", new XAttribute("Name", "Selected"),
+                new XAttribute("Type", "RLL"), new XElement("RLLContent", new XElement("Rung", new XAttribute("Number", "0"),
+                    new XElement("Text", $"XIC({operand})OTE(Out);")))));
             return doc.ToString();
         }
         var a = await Register(Rungs("A")); var b = await Register(Rungs("B"));
         Assert.Equal("comparison_limit", Assert.Throws<OperationException>(() => service.CompareProjects(Request(a, b))).Code);
+        var program = (string)XDocument.Parse(Xml).Descendants("Program").Single().Attribute("Name")!;
+        var scoped = service.CompareProjects(Request(a, b) with { ProgramName = program, RoutineName = "Selected" });
+        Assert.Equal("Rung", Assert.Single(scoped.Differences).Kind);
     }
     public void Dispose() => service.Dispose();
 }

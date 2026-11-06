@@ -1,6 +1,7 @@
 using System.Security;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
@@ -10,13 +11,19 @@ namespace Studio5000.Core;
 public sealed record MessageFieldChoice(string TagName, string Attribute, string Choice, string? ProgramName = null);
 public sealed record MergeFieldFinding(string Kind, string Location, string Status, string? BaselineSha256, string? LogicSha256,
     string? FreshSha256, string Detail, string? BaselineValue = null, string? LogicValue = null, string? FreshValue = null);
+public sealed record MergeStartupData(string Format, string Sha256, int Bytes, string Preview, bool Truncated);
+public sealed record MergeAddedTag(string TagName, string? ProgramName, string DataType, string? Dimensions,
+    string StartupValues, string RawSha256, MergeStartupData[] Data);
+public sealed record MergeAddedDataType(string Name, string RawSha256, string[] Dependencies);
 public sealed record MergePreservationReceipt(int TagRecords, int ReviewedRoutines, int ReplacedRoutines, int AddedRoutines,
     int RemovedRoutines, int MessageFieldsApplied, Dictionary<string, int> PreservedRepresentations,
-    Dictionary<string, int> FreshRepresentationsDifferentFromLogic, bool UneditedSourceBytesPreserved, string Scope);
+    Dictionary<string, int> FreshRepresentationsDifferentFromLogic, bool UneditedSourceBytesPreserved, string Scope,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] MergeAddedTag[]? AddedTags = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] MergeAddedDataType[]? AddedDataTypes = null);
 
 internal static class LogixPreservation
 {
-    public const string Boundary = "Offline, hash-bound UTF-8 preservation only. Keep every fresh tag record and Data representation, alias, declaration and configuration byte outside reviewed program-routine edits and explicit MESSAGE attribute choices. No value conversion or mixing of L5K/decorated data. AOI/layout edits and safety routine edits are unsupported. Native import/compile/readback and runtime/physical acceptance are separate; no controller connection.";
+    public const string Boundary = "Offline, hash-bound UTF-8 preservation. Keep fresh tag records, all saved data formats and configuration bytes outside reviewed routine, exact MESSAGE field and approved new tag/UDT patches. New tags retain the reviewed startup data byte for byte. Existing layouts, safety and AOI changes require separate workflows. Native import, build and runtime acceptance remain separate.";
     public static string? Fingerprint(XElement? node) => node is null ? null : ProjectService.Hash(Encoding.UTF8.GetBytes(ProjectComparison.Normalize(node, true).ToString(SaveOptions.DisableFormatting)));
     public static string? TextHash(string? value) => value is null ? null : ProjectService.Hash(Encoding.UTF8.GetBytes(value));
     public static string PolicyHash(LogicValueMergeRequest request) => ProjectService.Hash(JsonSerializer.SerializeToUtf8Bytes(new { schemaVersion = 1, policy = request }, ProjectService.Json));
@@ -87,12 +94,8 @@ internal static class LogixPreservation
 
 public sealed partial class ProjectService
 {
-    private (ProjectInfo Project, byte[] Bytes) PreservationSource(MergeSnapshot snapshot)
-    {
-        var project = Get(snapshot.ProjectId); Expect(project, snapshot.Sha256);
-        if (project.Kind != "logix") throw new OperationException("not_logix", "Select an exact managed Logix snapshot.");
-        return (project, File.ReadAllBytes(RevisionFile(project.Id, project.Revision)));
-    }
+    private (ProjectInfo Project, byte[] Bytes) PreservationSource(MergeSnapshot snapshot) =>
+        ReadBoundedLogixRevision(snapshot.ProjectId, snapshot.Sha256);
     private (LogicValueMergeReport Report, byte[] Bytes) BuildFreshPreservationMerge(LogicValueMergeRequest request)
     {
         if (request.Tags is not null || request.Resolutions is { Length: > 0 }) throw new OperationException("merge_policy", "Preserve-fresh covers the complete saved project; do not combine it with legacy tag maps/resolutions.");
@@ -103,11 +106,13 @@ public sealed partial class ProjectService
         void Finding(string kind, string location, string status, XElement? old, XElement? reviewed, XElement? current, string detail) => findings.Add(new(kind, location, status,
             LogixPreservation.Fingerprint(old), LogixPreservation.Fingerprint(reviewed), LogixPreservation.Fingerprint(current), detail));
         var at = LogixPreservation.Tags(baseline.Document); var bt = LogixPreservation.Tags(logic.Document); var ct = LogixPreservation.Tags(fresh.Document);
+        var declarationAdditions = PlanFreshAdditions(request, baseline, logic, fresh, at, bt, ct, findings, patches);
         foreach (var key in at.Keys.Union(bt.Keys, StringComparer.OrdinalIgnoreCase).Union(ct.Keys, StringComparer.OrdinalIgnoreCase))
         {
             at.TryGetValue(key, out var old); bt.TryGetValue(key, out var reviewed); ct.TryGetValue(key, out var current);
+            if (old is null && reviewed is not null) continue; // Checked and reported by the explicit additions plan.
             if (LogixPreservation.TagContract(old) != LogixPreservation.TagContract(reviewed))
-                Finding("tag-contract", key, "unsupported", old, reviewed, current, "Reviewed tag additions/removals, types, dimensions, aliases or safety class changed. This routine-preservation profile does not transfer declarations.");
+                Finding("tag-contract", key, "unsupported", old, reviewed, current, "Removing or changing an existing tag layout, alias, or safety class requires a separate reviewed edit.");
             else if (old is not null && LogixPreservation.TagContract(old) != LogixPreservation.TagContract(current))
                 Finding("tag-contract", key, "conflict", old, reviewed, current, "The fresh tag declaration/layout differs from the common baseline; review a compatible set of snapshots.");
             else if (old is not null && reviewed is not null && current is not null &&
@@ -123,7 +128,7 @@ public sealed partial class ProjectService
         var ac = baseline.Document.Root!.Element("Controller")!; var bc = logic.Document.Root!.Element("Controller")!; var cc = fresh.Document.Root!.Element("Controller")!;
         foreach (var (old, reviewed, current, location, excluded) in new[] {
             (baseline.Document.Root!, logic.Document.Root!, fresh.Document.Root!, "Root", new[]{"Controller"}),
-            (ac, bc, cc, "Controller", new[]{"Tags","Programs"}) })
+             (ac, bc, cc, "Controller", new[]{"DataTypes","Tags","Programs"}) })
             if (LogixPreservation.Fingerprint(Header(old, excluded)) != LogixPreservation.Fingerprint(Header(reviewed, excluded)))
                 Finding("configuration", location, "unsupported", Header(old, excluded), Header(reviewed, excluded), Header(current, excluded), "Reviewed non-routine configuration changed; preserve-fresh does not silently transfer controller, module, task, UDT, AOI or safety changes.");
         var ap = LogixPreservation.Index(ac.Elements("Programs").Elements("Program"), p => (string)p.Attribute("Name")!);
@@ -169,24 +174,17 @@ public sealed partial class ProjectService
         }
         foreach (var (program, fragments) in additions)
         {
-            var owner = cp[program]; var container = owner.Element("Routines"); var text = string.Join("", fragments);
-            if (container is null)
-            {
-                var span = fresh.Locate(owner); if (span.Empty) { Finding("routine-container", program, "unsupported", null, null, owner, "An empty program container requires a separate edit."); continue; }
-                patches.Add(new(span.CloseStart, span.CloseStart, "<Routines>" + text + "</Routines>"));
-            }
-            else
-            {
-                var span = fresh.Locate(container);
-                if (span.Empty) patches.Add(new(span.Start, span.End, fresh.Text[span.Start..(span.OpenEnd - 2)] + ">" + text + "</Routines>"));
-                else patches.Add(new(span.CloseStart, span.CloseStart, text));
-            }
+            var owner = cp[program];
+            if (owner.Element("Routines") is null && fresh.Locate(owner).Empty)
+            { Finding("routine-container", program, "unsupported", null, null, owner, "An empty program container requires a separate edit."); continue; }
+            patches.Add(fresh.InsertChildren(owner, "Routines", string.Concat(fragments)));
         }
         var selected = choices.ToDictionary(c => LogixPreservation.Key(c.ProgramName, c.TagName).ToUpperInvariant() + "/" + c.Attribute, StringComparer.Ordinal);
         var used = new HashSet<string>(StringComparer.Ordinal); var messageChanges = new Dictionary<XElement, Dictionary<string, string?>>(); var changedFields = 0;
         foreach (var key in at.Keys.Union(bt.Keys, StringComparer.OrdinalIgnoreCase).Union(ct.Keys, StringComparer.OrdinalIgnoreCase))
         {
             at.TryGetValue(key, out var old); bt.TryGetValue(key, out var reviewed); ct.TryGetValue(key, out var current);
+            if (old is null && reviewed is not null) continue; // New-tag startup data is reviewed and inserted as one record.
             var am = LogixPreservation.Message(old); var bm = LogixPreservation.Message(reviewed); var cm = LogixPreservation.Message(current);
             foreach (var name in new[] { am, bm, cm }.Where(n => n is not null).SelectMany(n => n!.Attributes()).Select(a => a.Name.LocalName).Distinct(StringComparer.Ordinal))
             {
@@ -222,7 +220,10 @@ public sealed partial class ProjectService
                     changedRepresentations[format] = changedRepresentations.GetValueOrDefault(format) + 1;
             }
         var bytes = fresh.Apply(patches); var resultHash = Hash(bytes);
-        var receipt = new MergePreservationReceipt(ct.Count, br.Count, replaced, added, removed, changedFields, representations, changedRepresentations, true, "Program routines plus exact MESSAGE attributes only; every other fresh source byte is retained.");
+        var receipt = new MergePreservationReceipt(ct.Count, br.Count, replaced, added, removed, changedFields, representations, changedRepresentations, true,
+            request.HasDeclarationAdditions ? "Every fresh byte outside the selected routine, MESSAGE field and declaration insertion spans is retained."
+                : "Program routines plus exact MESSAGE attributes only; every other fresh source byte is retained.",
+            request.HasDeclarationAdditions ? declarationAdditions.Tags : null, request.HasDeclarationAdditions ? declarationAdditions.Types : null);
         var reviewHash = Hash(JsonSerializer.SerializeToUtf8Bytes(new { request, findings, receipt, resultHash }, Json));
         var conflicts = findings.Where(f => f.Status is "conflict" or "unsupported").Select(f => f.Kind + ":" + f.Location + ": " + f.Detail).ToArray();
         static ComparisonSnapshot Snapshot(ProjectInfo p) => new(p.Id, p.Name, p.Revision, p.CurrentSha256);

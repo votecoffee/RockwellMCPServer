@@ -53,7 +53,7 @@ RockwellMCPServer gives agents and engineers a shared workspace for project insp
 | Capability | Scope |
 |---|---|
 | Logix project editing | Inspect and preview/apply L5X component changes; export L5X or exploded ZIP. Optional SDK conversion supports ACD files. |
-| Project review | Compare hash-bound Logix snapshots, find PLC tag where-used candidates in saved RLL/ST and direct aliases, and preview ladder branches as drawing geometry and passive SVG. |
+| Project review | Compare full hash-bound Logix exports or an exact program/routine, trace saved PLC symbols through routines and aliases, and browse ladder differences and drawings. |
 | Logix SDK jobs | Ordered native calls for projects, builds, imports, typed/raw tags and other operations in the bound SDK version. MCP history uses summary pages with a small initial buffer and a bounded response budget; exact per-job diagnostics remain separate. Availability depends on the installed Logix version and project. |
 | Whole-program import packages | Preserve all routines/local tags and complete source-bound legacy/nested type context, with separate type-only dependency delivery and saved readback/schedule checks. Existing types require Use Existing. XSD/readback do not prove native preconfiguration/import acceptance. See [program packaging](workflows/rockwell-engineering/references/program-import-packages.md). |
 | [Routine import packages](docs/ROUTINE_IMPORT_PACKAGES.md) | Tag-free whole RLL/ST routines with exact create-first tag prerequisites, or optional new program-only dependencies. Excludes controller/existing-tag definitions and preserves existing saved values; native acceptance remains separate. |
@@ -75,7 +75,7 @@ RockwellMCPServer gives agents and engineers a shared workspace for project insp
 | Diagnostic workflows | Trace readers/writers and AOI dependencies, explain captured rung conditions and record bounded pre/post trigger windows tied to a project revision. |
 | Multilingual documentation | Extract/search tag and rung comments, component/UDT/AOI descriptions and existing extended text; preview explicit language edits while preserving other translations. |
 | HMI languages | Browse/review/edit FactoryTalk ME/SE and View Designer workbook/Unicode exports, add language columns, preserve native keys and compare supplied re-exports. |
-| Logic/value preservation | Merge reviewed program routines while retaining all fresh saved tag records/representations and configuration, with exact MESSAGE field exceptions and reviewed preservation receipts. |
+| Logic/value preservation | Merge reviewed routines, exact MESSAGE field changes, and approved new tags and UDTs while retaining fresh values and unselected configuration. Verify declaration-addition results against the exact saved bytes. |
 | Scalar XML preservation | Edit PLC/FactoryTalk text and existing attributes while retaining source encoding, BOM, line endings and every unselected byte. |
 | Controller-tag rename | Review scoped references, ambiguous operands and safety handling; publish a separate byte-preserved project with all saved values and a reference receipt. |
 | [Module connection timing](workflows/rockwell-engineering/references/module-connections.md) | Browse exact RPI/delay/reaction-time fields, review source/hash/before-values and safety metadata, then publish a separate byte-preserved review copy and receipt. |
