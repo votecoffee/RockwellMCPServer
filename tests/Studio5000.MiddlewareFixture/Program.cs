@@ -19,35 +19,36 @@ if (args is ["worker", var workerRoot])
     return 1;
 }
 
-using var admission = new Mutex(false, @"Local\OpenAIEngineeringMiddleware.Job.v1");
-if (!admission.WaitOne(0)) return 75;
-try
+if (args is ["legacy-holder"])
 {
-    if (args is ["holder"])
+    using var legacy = new Mutex(false, @"Local\OpenAIEngineeringMiddleware.Job.v1");
+    if (!legacy.WaitOne(0)) return 1;
+    try
     {
         Console.WriteLine("ready");
         _ = Console.ReadLine();
         return 0;
     }
-    if (args is not ["cleanup", var root] || !Path.IsPathFullyQualified(root) || !Directory.Exists(root)) return 2;
-    var leafPath = Path.Combine(root, "leaf.json");
-    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-    _ = Task.Run(async () =>
-    {
-        while (!cancellation.IsCancellationRequested && !File.Exists(leafPath)) await Task.Delay(20);
-        await cancellation.CancelAsync();
-    });
-    var result = OwnedCommand.Run(root, Start("worker", root), null, cancellation.Token);
-    var driver = new WindowsResourceProcessDriver();
-    var leafIdentity = JsonSerializer.Deserialize<ProcessIdentity>(File.ReadAllBytes(leafPath))!;
-    var workerState = driver.State(result.Child!);
-    var leafState = driver.State(leafIdentity);
-    var passed = result.Failure is OperationCanceledException && result.Cleanup == "confirmed" &&
-        workerState is "absent" or "different" && leafState is "absent" or "different";
-    Console.WriteLine(JsonSerializer.Serialize(new { passed, result.Cleanup, workerState, leafState }));
-    return passed ? 0 : 1;
+    finally { legacy.ReleaseMutex(); }
 }
-finally { admission.ReleaseMutex(); }
+
+if (args is not ["cleanup", var root] || !Path.IsPathFullyQualified(root) || !Directory.Exists(root)) return 2;
+var leafPath = Path.Combine(root, "leaf.json");
+using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+_ = Task.Run(async () =>
+{
+    while (!cancellation.IsCancellationRequested && !File.Exists(leafPath)) await Task.Delay(20);
+    await cancellation.CancelAsync();
+});
+var result = OwnedCommand.Run(root, Start("worker", root), null, cancellation.Token);
+var driver = new WindowsResourceProcessDriver();
+var leafIdentity = JsonSerializer.Deserialize<ProcessIdentity>(File.ReadAllBytes(leafPath))!;
+var workerState = driver.State(result.Child!);
+var leafState = driver.State(leafIdentity);
+var passed = result.Failure is OperationCanceledException && result.Cleanup == "confirmed" &&
+    workerState is "absent" or "different" && leafState is "absent" or "different";
+Console.WriteLine(JsonSerializer.Serialize(new { passed, result.Cleanup, workerState, leafState }));
+return passed ? 0 : 1;
 
 ProcessStartInfo Start(string action, string path)
 {

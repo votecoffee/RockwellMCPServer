@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Studio5000.Core;
 using Studio5000.Core.Resources;
 
@@ -10,8 +9,6 @@ internal static class NativePilot
 {
     private static string Configuration => Path.Combine(AppContext.BaseDirectory, "native-pilot.json");
     private static string Pending => Path.Combine(EngineeringCli.StateRoot, "native-pending.json");
-    private static readonly JsonSerializerOptions StrictJson = new(EngineeringCli.Json)
-    { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
 
     internal static CliProblem? CheckAdmission()
     {
@@ -21,10 +18,10 @@ internal static class NativePilot
             new("native_disabled", "The local native pilot is disabled. This package runs saved L5X reads and SDK catalog discovery.");
     }
 
-    internal static object Run(string job, string requestPath)
+    internal static object Run(string job, string requestPath, bool typedReadExport)
     {
         if (CheckAdmission() is { } blocked) throw new OperationException(blocked.Code, blocked.Message);
-        var config = JsonSerializer.Deserialize<PilotConfiguration>(L5xSummary.ReadBytes(Configuration, 16 * 1024), StrictJson)
+        var config = JsonSerializer.Deserialize<PilotConfiguration>(L5xSummary.ReadBytes(Configuration, 16 * 1024), EngineeringCli.StrictJson)
             ?? throw new OperationException("native_pilot_invalid", "Missing native pilot configuration.");
         if (!Path.IsPathFullyQualified(config.WorkspaceRoot) || !Directory.Exists(config.WorkspaceRoot))
             throw new OperationException("native_pilot_invalid", "Use an existing absolute native pilot workspace.");
@@ -42,8 +39,9 @@ internal static class NativePilot
         }
 
         var bytes = L5xSummary.ReadBytes(requestPath, 2 * 1024 * 1024);
-        var request = JsonSerializer.Deserialize<SdkRunRequest>(bytes, StrictJson)
-            ?? throw new OperationException("sdk_request_invalid", "Supply a JSON SDK run request.");
+        var request = typedReadExport ? SdkReadExport.ToSdkRequest(bytes) :
+            JsonSerializer.Deserialize<SdkRunRequest>(bytes, EngineeringCli.StrictJson)
+                ?? throw new OperationException("sdk_request_invalid", "Supply a JSON SDK run request.");
         if (request.ProjectId is not null || request.SourceArtifactId is not null || request.ControllerTargetId is not null ||
             request.SourcePath is { } source && !Path.IsPathFullyQualified(source) ||
             request.InputFiles?.Values.Any(file => file is null || file.ArtifactId is not null || file.Path is null ||

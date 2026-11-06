@@ -14,9 +14,11 @@ internal sealed record CliRequest(string Operation, string Input, int TimeoutSec
 
 internal static class EngineeringCli
 {
-    private const string AdmissionName = @"Local\OpenAIEngineeringMiddleware.Job.v1";
+    internal const string Version = "1.1.0";
     internal const string JobEnvironment = "ROCKWELL_ENGINEERING_OWNED_JOB";
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal static readonly JsonSerializerOptions StrictJson = new(Json)
+    { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
     internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RockwellEngineering");
 
     internal static int Execute(string[] args)
@@ -28,6 +30,11 @@ internal static class EngineeringCli
             Console.WriteLine("""
                 Rockwell.EngineeringCli operations
                   l5x-summary --input <absolute L5X path> [--timeout-seconds 1..300]
+                  l5x-inspect --request <absolute JSON path>
+                  l5x-preview --request <absolute JSON path>
+                  l5x-apply --request <absolute JSON path>
+                  sdk-read-export-plan --request <absolute JSON path>
+                  sdk-read-export --request <absolute JSON path> [--timeout-seconds 1..300]
                   sdk-offline --request <absolute JSON path> [--timeout-seconds 1..300]
                   sdk-catalog
                   operations
@@ -38,18 +45,23 @@ internal static class EngineeringCli
                 """);
             return 0;
         }
-        if (args is ["--version"]) { Console.WriteLine(WorkspaceIdentity.Version); return 0; }
+        if (args is ["--version"]) { Console.WriteLine(Version); return 0; }
         if (args is ["operations"])
         {
-            Print(new { version = WorkspaceIdentity.Version, operations = new[] {
+            Print(new { version = Version, operations = new[] {
                 new { name = "l5x-summary", input = "--input", mode = "saved-file-read" },
+                new { name = "l5x-inspect", input = "--request", mode = "saved-file-read" },
+                new { name = "l5x-preview", input = "--request", mode = "offline-review" },
+                new { name = "l5x-apply", input = "--request", mode = "new-offline-copy" },
+                new { name = "sdk-read-export-plan", input = "--request", mode = "offline-review" },
+                new { name = "sdk-read-export", input = "--request", mode = "native-pilot-required" },
                 new { name = "sdk-offline", input = "--request", mode = "native-pilot-required" },
                 new { name = "sdk-catalog", input = "", mode = "static-metadata" } } });
             return 0;
         }
         if (args is ["sdk-catalog"])
         {
-            Print(new { version = WorkspaceIdentity.Version, assembly = SdkCatalog.Surface.Assembly, methods = SdkCatalog.Methods,
+            Print(new { version = Version, catalogVersion = WorkspaceIdentity.Version, assembly = SdkCatalog.Surface.Assembly, methods = SdkCatalog.Methods,
                 offlinePilotMethods = NativeExecutionPolicy.LocalMethods });
             return 0;
         }
@@ -58,15 +70,7 @@ internal static class EngineeringCli
             var request = Parse(args);
             if (!OperatingSystem.IsWindowsVersionAtLeast(10))
                 return Report(69, request.Operation, null, null, "not-started", null, new("unsupported_platform", "Use Windows 10 or newer."));
-            using var admission = new Mutex(false, AdmissionName);
-            try
-            {
-                if (!admission.WaitOne(0))
-                    return Report(75, request.Operation, null, null, "not-started", null, new("busy", "Another engineering middleware job owns this Windows session."));
-            }
-            catch (AbandonedMutexException) { } // The caller now owns the mutex. Native admission also checks its durable marker.
-            try { return RunJob(request); }
-            finally { admission.ReleaseMutex(); }
+            return RunJob(request);
         }
         catch (OperationException ex)
         {
@@ -81,7 +85,8 @@ internal static class EngineeringCli
     private static CliRequest Parse(string[] args)
     {
         var operation = args[0];
-        var inputOption = operation switch { "l5x-summary" => "--input", "sdk-offline" => "--request",
+        var inputOption = operation switch { "l5x-summary" => "--input",
+            "l5x-inspect" or "l5x-preview" or "l5x-apply" or "sdk-offline" or "sdk-read-export" or "sdk-read-export-plan" => "--request",
             _ => throw new OperationException("unknown_operation", "Use operations or --help to list the supported commands.") };
         string? input = null;
         var timeout = 30;
@@ -104,7 +109,8 @@ internal static class EngineeringCli
 
     private static int RunJob(CliRequest request)
     {
-        if (request.Operation == "sdk-offline")
+        var native = request.Operation is "sdk-offline" or "sdk-read-export";
+        if (native)
         {
             var blocked = NativePilot.CheckAdmission();
             if (blocked is not null) return Report(69, request.Operation, null, null, "not-started", null, blocked);
@@ -144,7 +150,7 @@ internal static class EngineeringCli
                 : reply?.Error is { } error ? (1, error)
                 : worker.ExitCode != 0 || reply?.Result is null ? (1, new CliProblem("worker_failed", "The owned worker exited without a valid result."))
                 : (0, (CliProblem?)null);
-            if (request.Operation == "sdk-offline" && code == 0 && worker.Cleanup == "confirmed")
+            if (native && code == 0 && worker.Cleanup == "confirmed")
             {
                 try { NativePilot.Confirm(id); }
                 catch (Exception ex) { (code, problem) = (70, Problem(ex)); }
@@ -176,7 +182,11 @@ internal static class EngineeringCli
             var result = operation switch
             {
                 "l5x-summary" => L5xSummary.Read(input),
-                "sdk-offline" => NativePilot.Run(job, input),
+                "l5x-inspect" => L5xWorkflow.Inspect(input),
+                "l5x-preview" => L5xWorkflow.Preview(job, input),
+                "l5x-apply" => L5xWorkflow.Apply(job, input),
+                "sdk-read-export-plan" => SdkReadExport.Plan(input),
+                "sdk-offline" or "sdk-read-export" => NativePilot.Run(job, input, operation == "sdk-read-export"),
                 _ => throw new OperationException("unknown_operation", "Unsupported worker operation.")
             };
             Print(new WorkerReply(JsonSerializer.SerializeToElement(result, Json), null));
@@ -202,7 +212,7 @@ internal static class EngineeringCli
     private static int Report(int exitCode, string operation, string? jobId, string? receipt, string cleanup, JsonElement? result, CliProblem? error)
     {
         if (error is not null) Console.Error.WriteLine($"{error.Code}: {error.Message}");
-        Print(new { schemaVersion = 1, version = WorkspaceIdentity.Version, operation, jobId,
+        Print(new { schemaVersion = 1, version = Version, operation, jobId,
             status = exitCode == 0 ? "succeeded" : "error", exitCode, result, error, cleanup, receipt });
         return exitCode;
     }

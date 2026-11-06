@@ -1,4 +1,4 @@
-"""Run the Windows CLI, optional MCP adapter, and process-ownership smoke checks."""
+"""Verify the app-only Rockwell rollout using a disposable saved export and owned stand-in."""
 
 import argparse
 import hashlib
@@ -8,6 +8,7 @@ from pathlib import Path
 import queue
 import subprocess
 import threading
+import xml.etree.ElementTree as ET
 
 
 def run(arguments, code=0):
@@ -17,107 +18,90 @@ def run(arguments, code=0):
     return json.loads(process.stdout)
 
 
-def receive_lines(stream, output):
-    for line in stream:
-        output.put(line)
-    output.put(None)
-
-
-def finish_fixture(process, seconds):
-    process.stdin.close()
-    try:
-        assert process.wait(timeout=seconds) == 0
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        process.wait(timeout=10)
-        raise
-
-
-def adapter_under_contention(executable, cli, source):
-    messages = queue.Queue()
-    with subprocess.Popen([executable, "--cli", cli], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
-                          creationflags=subprocess.CREATE_NO_WINDOW) as process:
-        threading.Thread(target=receive_lines, args=(process.stdout, messages), daemon=True).start()
-
-        def rpc(method, params, identifier=None):
-            request = {"jsonrpc": "2.0", "method": method, "params": params}
-            if identifier is not None:
-                request["id"] = identifier
-            process.stdin.write(json.dumps(request) + "\n")
-            process.stdin.flush()
-            if identifier is not None:
-                reply = json.loads(messages.get(timeout=30))
-                assert reply["id"] == identifier and "error" not in reply, reply
-                return reply["result"]
-
-        try:
-            rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                               "clientInfo": {"name": "middleware-smoke", "version": "1"}}, 1)
-            rpc("notifications/initialized", {})
-            tools = rpc("tools/list", {}, 2)["tools"]
-            assert [tool["name"] for tool in tools] == ["rockwell_l5x_summary"]
-            result = rpc("tools/call", {"name": tools[0]["name"], "arguments": {"path": str(source)}}, 3)
-            payload = result.get("structuredContent") or json.loads(result["content"][0]["text"])
-            assert payload["error"]["code"] == "busy" and payload["exitCode"] == 75, result
-        finally:
-            finish_fixture(process, 15)
-    return len(tools)
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deployment", type=Path, required=True)
-    parser.add_argument("--fixture", type=Path, required=True, help="Built Windows middleware fixture executable")
-    parser.add_argument("--evidence", type=Path, required=True, help="New directory for this run")
+    parser.add_argument("--fixture", type=Path, required=True)
+    parser.add_argument("--evidence", type=Path, required=True, help="New directory for the disposable run")
     args = parser.parse_args()
     assert os.name == "nt" and all(path.is_absolute() for path in (args.deployment, args.fixture, args.evidence))
     args.evidence.mkdir()
     cli = args.deployment / "cli/Rockwell.EngineeringCli.exe"
-    adapter = args.deployment / "mcp-adapter/Rockwell.EngineeringMcp.exe"
-    assert cli.is_file() and adapter.is_file() and args.fixture.is_file()
-    source = Path(__file__).resolve().parents[1] / "examples/Demo.L5X"
-    state = Path(os.environ["LOCALAPPDATA"]) / "RockwellEngineering/jobs"
+    assert cli.is_file() and args.fixture.is_file() and not (cli.parent / "native-pilot.json").exists()
+    fixture = Path(__file__).resolve().parents[1] / "examples/ReviewDemo.L5X"
+    source = args.evidence / "source.L5X"
+    source.write_bytes(fixture.read_bytes())
+    original = sha(source)
 
-    def job_ids():
-        return set(state.iterdir()) if state.is_dir() else set()
+    def call(operation, name, request, code=0):
+        path = args.evidence / (name + ".json")
+        path.write_text(json.dumps(request), encoding="utf-8")
+        return run([cli, operation, "--request", path], code)
 
-    summary = run([cli, "l5x-summary", "--input", source])
-    assert summary["cleanup"] == "confirmed" and summary["result"]["input"]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    invalid = args.evidence / "invalid.L5X"
-    invalid.write_bytes(b"not XML")
-    failure = run([cli, "l5x-summary", "--input", invalid], 1)
-    assert failure["cleanup"] == "confirmed" and failure["error"]["code"] == "invalid_xml"
-    disabled = run([cli, "sdk-offline", "--request", args.evidence / "unused.json"], 69)
-    assert disabled["cleanup"] == "not-started" and disabled["error"]["code"] == "native_disabled"
-    catalog = run([cli, "sdk-catalog"])
-    assert catalog["methods"] and "GetProcessorTypesAsync" in catalog["offlinePilotMethods"]
-
-    before = job_ids()
-    with subprocess.Popen([args.fixture, "holder"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    with subprocess.Popen([args.fixture, "legacy-holder"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW) as holder:
-        lines = queue.Queue()
-        threading.Thread(target=receive_lines, args=(holder.stdout, lines), daemon=True).start()
+        ready = queue.Queue()
+        threading.Thread(target=lambda: ready.put(holder.stdout.readline()), daemon=True).start()
         try:
-            assert (lines.get(timeout=15) or "").strip() == "ready", "The shared mutex must be available for this control."
-            busy = run([cli, "l5x-summary", "--input", source], 75)
-            assert busy["error"]["code"] == "busy" and busy["jobId"] is None and busy["cleanup"] == "not-started"
-            assert run([cli, "operations"])["operations"]
-            tool_count = adapter_under_contention(adapter, cli, source)
-            assert job_ids() == before
+            assert ready.get(timeout=15).strip() == "ready"
+            tags = call("l5x-inspect", "tags", {"sourcePath": str(source), "kind": "tags", "program": "ExampleProgram"})
         finally:
-            finish_fixture(holder, 10)
+            holder.stdin.close()
+            try:
+                assert holder.wait(timeout=10) == 0
+            except subprocess.TimeoutExpired:
+                holder.terminate()
+                holder.wait(timeout=10)
+                raise
+    assert tags["version"] == "1.1.0" and tags["cleanup"] == "confirmed" and tags["result"]["input"]["sha256"] == original
+    selected = next(row for row in tags["result"]["items"] if row["name"] == "Input")["editableTexts"][0]
+    rungs = call("l5x-inspect", "rungs", {"sourcePath": str(source), "kind": "rungs",
+                                        "program": "ExampleProgram", "routine": "MainRoutine"})
+    assert rungs["result"]["total"] == 3
+    text = "Reviewed input for offline handoff"
+    preview = call("l5x-preview", "preview-request", {"sourcePath": str(source), "expectedSha256": original,
+                                                      "xpath": selected["xpath"], "text": text})
+    review = preview["result"]["reviewFile"]
+    assert preview["result"]["review"]["before"] == selected["text"] and sha(source) == original
+    output = args.evidence / "reviewed.L5X"
+    request = {"reviewPath": review["path"], "reviewSha256": review["sha256"], "outputPath": str(output)}
+    stale = call("l5x-apply", "stale-review", {**request, "reviewSha256": "0" * 64}, 1)
+    assert stale["error"]["code"] == "stale_review" and not output.exists()
+    applied = call("l5x-apply", "apply-request", request)
+    assert applied["result"]["readback"]["text"] == text and applied["result"]["output"]["sha256"] == sha(output)
+    assert sha(source) == sha(fixture) == original
+    original_tree, output_tree = ET.parse(source), ET.parse(output)
+    selector = "./Controller/Programs/Program/Tags/Tag[@Name='Input']/Description"
+    assert output_tree.findtext(selector) == text
+    output_tree.find(selector).text = original_tree.findtext(selector)
+    assert ET.tostring(output_tree.getroot()) == ET.tostring(original_tree.getroot())
+
+    acd = args.evidence / "fingerprint-only.ACD"
+    acd.write_bytes(b"Synthetic bytes for the no-SDK plan check")
+    sdk_request = {"sourcePath": str(acd), "expectedSha256": sha(acd), "program": "NativeLocalProbe",
+                   "tag": "PilotInput", "dataType": "DINT", "exportName": "review.L5X"}
+    plan = call("sdk-read-export-plan", "sdk-plan-request", sdk_request)
+    assert [step["method"] for step in plan["result"]["calls"]] == ["OpenLogixProjectAsync", "GetTagValueDINTAsync", "SaveAsAsync"]
+    assert plan["result"]["nativeExecuted"] is False
+    disabled = call("sdk-read-export", "disabled-sdk-request", sdk_request, 69)
+    assert disabled["error"]["code"] == "native_disabled" and disabled["cleanup"] == "not-started"
+
     cleanup_root = args.evidence / "owned-cleanup"
     cleanup_root.mkdir()
     cleanup = run([args.fixture, "cleanup", cleanup_root])
     assert cleanup["passed"]
-    report = {"summary": summary, "failure": failure, "nativeDisabled": disabled,
-              "sdkCatalogMethods": len(catalog["methods"]), "busy": busy,
-              "adapterDiscoveryTools": tool_count, "discoveryAndBusyCreatedNoJob": True, "cancelledOwnedTree": cleanup}
-    with (args.evidence / "smoke.json").open("x", encoding="utf-8") as output:
-        json.dump(report, output, indent=2)
-        output.write("\n")
-    print(json.dumps(report, indent=2))
+    report = {"version": tags["version"], "tags": tags, "rungs": rungs, "preview": preview, "apply": applied,
+              "staleReview": stale, "legacyMutexDidNotRejectFileJob": True, "sourceAndOtherXmlPreserved": True,
+              "sdkPlan": plan, "nativeDisabled": disabled, "cancelledOwnedTree": cleanup}
+    with (args.evidence / "smoke.json").open("x", encoding="utf-8") as output_file:
+        json.dump(report, output_file, indent=2)
+        output_file.write("\n")
+    print(json.dumps({"version": tags["version"], "output": applied["result"]["output"], "sourceSha256": original,
+                      "receipt": str(args.evidence / "smoke.json"), "cleanup": cleanup}))
 
 
 if __name__ == "__main__":

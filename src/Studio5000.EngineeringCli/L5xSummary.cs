@@ -45,6 +45,11 @@ internal static class L5xSummary
     {
         ProjectService.RejectLinks(path);
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return ReadBytes(file, maximum);
+    }
+
+    internal static byte[] ReadBytes(FileStream file, int maximum)
+    {
         if (file.Length is <= 0 || file.Length > maximum)
             throw new OperationException("invalid_input_size", $"Input must contain 1 through {maximum} bytes.");
         var bytes = new byte[(int)file.Length];
