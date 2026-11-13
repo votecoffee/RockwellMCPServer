@@ -136,6 +136,16 @@ Seven/eight-level wrappers fail, including inherited findings and comparison of 
 
 Exact identical XIC/XIO and comparison predicates repeated within a contiguous series of supported predicates produce nonblocking `warning` findings and per-check `warnings` counts. Branch boundaries, outputs, calls and unknown/stateful instructions interrupt these paths. Warnings never remove predicates or claim scan equivalence. Unsupported/malformed/over-budget text stays explicit. Structured text, opaque routines, native compilation, scheduling, motion and runtime acceptance are outside this preflight. Generated tests cover readable program/AOI rungs, seven/eight-level wrappers, arrays/quoted branch tokens, parallel legs, repeated continuation predicates, inherited/resolved findings, waiver rejection and import rejection without SDK jobs.
 
+All four profiles also include `rll-output-coverage`. This check examines each terminal path to the right rail. A path ending in a known input instruction fails even if an earlier instruction was an output. A common output after the branch covers its legs. This follows the output placement rule on pages 14–15 of the same Rockwell manual.
+
+```text
+MOV(NextId,RecordId)ADD(NextId,1,NextId)[GRT(NextId,100000)MOV(1,NextId)OTL(ResetEvent),LEQ(NextId,100000)];
+```
+
+That rung fails at the terminal LEQ alternative. Both `[XIC(A),XIC(B)]OTE(C);` and `[XIC(A),XIC(B)]MOV(1,Value);` satisfy output coverage. Bracket and BST/NXB/BND forms use the same bounded parser. Nested terminal branches are checked without enumerating combinations of earlier input paths.
+
+`studio_validation_profiles` returns `outputCoverageProfile`, which lists the known input and output mnemonics. Unknown terminal instructions, including AOIs whose native output classification is unavailable, report `unsupported`. The check classifies terminal placement only. Instruction operands, types, complete syntax and native rung validity need separate validation. Known failures remain blocking when inherited, retain the rung hash and exact branch path, and cannot be waived as expected native differences.
+
 ## Selector refactor preview
 
 `studio_selector_refactor_preview` and `POST /api/projects/{id}/logic/selector-refactor-preview` share a read-only Core operation. **Diagnostics & workflows → Selector refactor preview** opens the same operation editor in the GUI. Supply `expectedSha256`, an exact program `routineXPath`, a zero-based `rungIndex` and a fresh `routeTagPrefix` (1..24 identifier characters). The report pins the source snapshot and original rung hash, a deterministic review hash, proposed program-scope BOOL declarations, original MOV operands/order and every proposed rung. It creates no project revision, artifact, tags or native job; there is no automatic apply operation.

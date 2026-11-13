@@ -62,8 +62,17 @@ public static class LadderPreflight
                 else seen.Clear(); // Outputs, calls, stateful and unknown instructions interrupt the path.
             }
         }
-        try { Walk(LadderPreview.ParseLogic(text), "rung"); }
-        catch (OperationException ex) { findings.Add(new(DuplicateCheck, "unsupported", "Predicate scan unavailable: " + ex.Message, "rung")); }
+        try
+        {
+            var parts = LadderPreview.ParseLogic(text);
+            Walk(parts, "rung");
+            findings.AddRange(LadderOutputCoverage.Inspect(parts));
+        }
+        catch (OperationException ex)
+        {
+            findings.Add(new(DuplicateCheck, "unsupported", "Predicate scan unavailable: " + ex.Message, "rung"));
+            findings.Add(LadderOutputCoverage.Unavailable(ex.Message));
+        }
         return new(NativeProfile, MaximumBranchDepth, depth, findings.ToArray());
     }
 }

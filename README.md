@@ -82,7 +82,7 @@ RockwellMCPServer gives agents and engineers a shared workspace for project insp
 | [Module connection timing](workflows/rockwell-engineering/references/module-connections.md) | Browse exact RPI/delay/reaction-time fields, review source/hash/before-values and safety metadata, then publish a separate byte-preserved review copy and receipt. |
 | [Safety-module configuration boundary](docs/SAFETY_MODULE_CONFIGURATION.md) | Documents the user-operated native AOP/SCID handoff. Automated channel configuration and SCID recalculation remain unavailable; decoded byte edits stay unvalidated. |
 | [Scoped structural review](workflows/rockwell-engineering/references/structural-edits.md) | Edit scoped routines/tags/UDTs with raw source preservation, exact reference AOI/UDT additions, saved-state decisions and retained preview/apply receipts identifying their producer and version. |
-| Named validation profiles | Offline integrity, complex UDT member metadata, strict RLL branch grammar, merge preservation and saved native readback comparison, with source-bound findings and immutable receipts. |
+| Named validation profiles | Offline integrity, UDT member metadata, RLL branch grammar and terminal output coverage, merge preservation and saved native readback comparison, with source-bound findings and immutable receipts. |
 | Version workflows | Separate native upgrade/readback jobs and bounded v35-to-v32 review-only L5K preparation, with explicit compatibility boundaries. |
 | Reloadable extensions | Discover operation schemas and reload compatible modules through MCP or the GUI while the host and chat remain running. |
 | Codex plugin | Standalone plugin with live capability discovery and shared versioned workflow guides. |
