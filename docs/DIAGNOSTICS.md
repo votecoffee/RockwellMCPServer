@@ -25,11 +25,32 @@ Good/missing sample counts exclude session/gap markers. Gaps are reported separa
 
 ## Logic tracing
 
-`studio_logic_trace` / `POST /api/projects/{id}/logic/trace` requires the exact saved project hash, tag name, optional program, direction (`upstream`, `downstream`, `both`) and depth 0..8. Program-local declarations shadow controller names. Explicit program-qualified operands and alias chains are resolved; cycles and missing declarations are diagnostics.
+`studio_logic_trace` / `POST /api/projects/{id}/logic/trace` requires the exact saved project hash, tag name, optional program, direction (`upstream`, `downstream`, `both`) and depth 0..8. Program-local declarations shadow controller names. Select a base tag, or select a member/bit using `tagName: "O.Packet.22"` or `tagName: "O", memberPath: "Packet.22"`. Constant array indices are supported. A selector must resolve to declared members and an in-range integer bit. Alias chains and explicit UDT BIT Target/BitNumber metadata retain the underlying packet bit identity.
 
-Trace supports full saved exports up to 64 MiB, 1,000,000 XML elements and 64 nesting levels. The trace index scans program routines so qualified references and aliases can cross program boundaries. Its separate limits are 16 MiB of source text, 100,000 expanded rungs, 250,000 operand usages and 500,000 dependency edges. A result is limited to 1,000 symbols and 4 MiB.
+Trace supports full saved exports up to 64 MiB, 1,000,000 XML elements and 64 nesting levels. The index scans program routines so qualified references and aliases can cross program boundaries. Its separate limits are 16 MiB of source text, 100,000 expanded rungs, 250,000 operand usages and 500,000 dependency edges. Traversal retains at most 1,000 regions and reports `limited` when that budget is reached.
 
-The graph reports possible dependencies at base-tag granularity across routines. RLL series/branch guards connect reads to possible writes conservatively. Known operand effects include contacts/comparisons, OTE/OTL/OTU/RES, MOV/NOT, arithmetic/bit operations, COP/CPS/FLL, timers/counters and ONS. Unrecognized effects, expressions, dynamic indices and conditional routine calls remain explicit diagnostics. This does not establish scheduling, scan order, external writers or native compiler binding.
+Results have independent usage and dependency pages. Use `offset`/`limit` and `dependencyOffset`/`dependencyLimit`, with 1..200 rows per page and default limits of 100. Read `totalUsages`, `totalDependencies`, `nextOffset` and `nextDependencyOffset`. Resume using the returned offsets and the identical query/source hash. Each list also has a 1 MiB byte budget, so a page can be shorter than its row limit. The complete response remains bounded to 4 MiB. `role` accepts `all`, `read`, `write` or `unknown`. Read/write filters include read-write and unknown effects, preserving possible readers/writers for review.
+
+For exact members, usage rows normally cover the selected region. Symbols and dependencies describe the requested traversal. Set `includeRelatedUsages: true` to also page usages of the traversed source/destination regions. Base-tag requests retain the earlier related-usage behavior. `limited` indicates additional pages or unvisited graph coverage. `partial` identifies unresolved effects, layouts, diagnostics or traversal truncation. Each usage retains its original operand, alias chain, instruction ordinal, source selector and declared `region`. Dependencies retain both endpoint regions and their mapping.
+
+```json
+{
+  "projectId": "<registered-project-id>",
+  "request": {
+    "expectedSha256": "<exact saved hash>",
+    "tagName": "O",
+    "memberPath": "Packet.22",
+    "depth": 1,
+    "role": "write",
+    "limit": 50,
+    "dependencyLimit": 50
+  }
+}
+```
+
+Known literal BTD fields are narrowed to their copied bit ranges, and source/destination offsets are followed during traversal. Extra destination bits beyond a narrow source have no mapped source dependency. COP/CPS ranges use the destination element width and support exact integer scalar/atomic-array regions, including different integer widths. Copies with an unknown length, UDT byte packing or a span crossing the declared member region remain possible effects and report `copy_byte_layout_or_length_unknown`. The trace never invents byte offsets for UDTs. [Rockwell BTD semantics](https://www.rockwellautomation.com/en-hu/docs/studio-5000-logix-designer/37-00/contents-ditamap/instruction-set/move-logical-instructions/bit-field-distribute--btd-.html) · [Rockwell COP/CPS semantics](https://www.rockwellautomation.com/en-us/docs/studio-5000-logix-designer/38-01/contents-ditamap/instruction-set/array-file-misc-instructions/copy-synchronous-copy-file--cps-.html)
+
+The graph reports possible dependencies across routines, using declared member ranges for exact selectors and aggregate edges for base-tag queries. RLL series/branch guards connect reads to possible writes conservatively. Known operand effects include contacts/comparisons, OTE/OTL/OTU/RES, MOV/NOT, arithmetic/bit operations, BTD, COP/CPS/FLL, timers/counters and ONS. Unrecognized effects, expressions, dynamic indices and conditional routine calls remain explicit diagnostics. This does not establish scheduling, scan order, external writers or native compiler binding.
 
 Unambiguous AOI call layouts bind ordered required/visible parameters, follow InOut references and expand available RLL bodies, local tags and parameter aliases. EnableIn/EnableOut are excluded from ordinary call operands. Ambiguous layouts, recursion, protected/unavailable bodies and unsupported languages remain unknown. Rockwell documents parameter usage, ordering and aliases in the [AOI Parameters editor](https://www.rockwellautomation.com/en-us/docs/studio-5000-logix-designer/38-01/contents-ditamap/studio-5000-logix-designer/add-on-instructions/edit-an-add-on-instruction/add-on-instruction-definition-editor---parameters.html).
 

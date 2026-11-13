@@ -73,7 +73,7 @@ RockwellMCPServer gives agents and engineers a shared workspace for project insp
 | Reusable merge mappings | Import/export portable JSON name pairs, bind to explicit snapshots/program scopes and generate a fresh value preview. |
 | Optional CIP reader | Read bounded scalar/UDT/array symbols through an isolated libplctag worker; plan reads offline and share watch recording/trends. Live validation pending. |
 | Trending and recording | Save/edit named views, graph values and gaps, gather paged statistics, export exact JSON results/CSV and retain history across restarts. |
-| Diagnostic workflows | Trace readers/writers and AOI dependencies, explain captured rung conditions and record bounded pre/post trigger windows tied to a project revision. |
+| Diagnostic workflows | Trace exact tag/member/packet-bit readers and writers with paged results and known BTD/COP ranges, explain captured rung conditions and record bounded pre/post trigger windows tied to a project revision. |
 | Multilingual documentation | Extract/search tag and rung comments, component/UDT/AOI descriptions and existing extended text; preview explicit language edits while preserving other translations. |
 | HMI languages | Browse/review/edit FactoryTalk ME/SE and View Designer workbook/Unicode exports, add language columns, preserve native keys and compare supplied re-exports. |
 | Logic/value preservation | Merge reviewed routines, exact MESSAGE field changes, and approved new tags and UDTs while retaining fresh values and unselected configuration. Verify declaration-addition results against the exact saved bytes. |
