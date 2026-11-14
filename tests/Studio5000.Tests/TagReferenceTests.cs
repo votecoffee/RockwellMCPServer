@@ -151,14 +151,18 @@ public sealed class TagReferenceTests : IDisposable
         ExtensionSchema.Validate(operation.InputSchema, JsonSerializer.SerializeToElement(new { projectId = "id", request = new TagReferenceRequest("hash", "Value", "First") }, ProjectService.Json));
     }
     [Fact]
-    public async Task DiagnosticsAndCandidateBudgetsAreBoundedEvenWhenNothingMatches()
+    public async Task DiagnosticsAreBoundedAndUnrelatedCandidatesDoNotExhaustAnExactQuery()
     {
         var p = await Register(Document(Enumerable.Repeat("Local:1:I.Data;", 60).ToArray())); var report = Find(p);
         Assert.True(report.DiagnosticsTruncated); Assert.Equal(50, report.Diagnostics.Length); Assert.Empty(report.References);
-        var tooManyTokens = await Register(Document([], [string.Concat(Enumerable.Repeat("Other;", 100001))]));
-        Assert.Equal("tag_reference_limit", Assert.Throws<OperationException>(() => Find(tooManyTokens)).Code);
-        var tooManyMatches = await Register(Document([], [string.Concat(Enumerable.Repeat("Value;", 10001))]));
-        Assert.Equal("tag_reference_limit", Assert.Throws<OperationException>(() => Find(tooManyMatches)).Code);
+        var large = await Register(Document([], [string.Concat(Enumerable.Repeat("Other;", 100001)) + "Value:=1;"]));
+        var exact = Find(large);
+        Assert.Single(exact.References); Assert.True(exact.ScannedCandidates > 100000);
+        var manyMatches = await Register(Document([], [string.Concat(Enumerable.Repeat("Value;", 10001))]));
+        var first = Find(manyMatches);
+        Assert.Equal(10001, first.Total); Assert.Equal(100, first.References.Length); Assert.Equal(100, first.NextOffset);
+        var next = service.FindTagReferences(manyMatches.Id, new(manyMatches.CurrentSha256, "Value", "First", Offset: 10000));
+        Assert.Single(next.References); Assert.Null(next.NextOffset);
     }
     [Fact]
     public async Task DuplicateRungNumbersRetainDistinctSelectorsAndLadderOffsets()
@@ -173,6 +177,15 @@ public sealed class TagReferenceTests : IDisposable
             var preview = service.PreviewLadder(p.Id, new(p.CurrentSha256, reference.RoutineXPath!, reference.RungIndex!.Value, 1));
             Assert.Equal(reference.RungIndex, Assert.Single(preview.Rungs).Index);
         }
+    }
+    [Fact]
+    public async Task Cross_line_addresses_are_excluded_from_totals_on_every_page()
+    {
+        var p = await Register(Document([], ["Value[", "Index]:=1; Value:=2;"]));
+        var first = Find(p);
+        var empty = service.FindTagReferences(p.Id, new(p.CurrentSha256, "Value", "First", Offset: 1));
+        Assert.Equal(1, first.Total); Assert.Equal(first.Total, empty.Total); Assert.Empty(empty.References);
+        Assert.Equal(first.Diagnostics, empty.Diagnostics);
     }
     [Fact]
     public async Task EncodedPageLimitCanBeRecoveredByRequestingFewerOccurrences()

@@ -10,7 +10,7 @@ public sealed record TagReferenceOccurrence(string Kind, string? ProgramName, st
     string Status, string Snippet, int SnippetStart, bool SnippetTruncated, int? RungIndex = null);
 public sealed record TagReferenceReport(ProjectInfo Project, string TagName, string? ProgramName, int Total,
     int Offset, int Limit, TagReferenceOccurrence[] References, int ScannedSources, int SkippedSources,
-    string[] Diagnostics, bool DiagnosticsTruncated, string Coverage);
+    string[] Diagnostics, bool DiagnosticsTruncated, string Coverage, int? NextOffset = null, int ScannedCandidates = 0);
 
 /// <summary>A lexical where-used view. Compiler binding, instruction effects and alias propagation are deliberately separate.</summary>
 public static class TagReferences
@@ -24,9 +24,9 @@ public static class TagReferences
     public static TagReferenceReport Find(ProjectInfo project, XDocument document, TagReferenceRequest request)
     {
         WatchValidation.Identifier(request.TagName); if (request.ProgramName is not null) WatchValidation.Identifier(request.ProgramName);
-        if (request.TagName.Length > 256 || request.ProgramName?.Length > 256 || request.Offset is < 0 or > 100000 ||
+        if (request.TagName.Length > 256 || request.ProgramName?.Length > 256 || request.Offset is < 0 or > 16 * 1024 * 1024 ||
             request.Limit is < 1 or > 200 || request.Query?.Length > 256)
-            throw new OperationException("invalid_tag_reference_query", "Use exact base tag/program names up to 256 characters, offset 0..100000, limit 1..200 and query up to 256 characters.");
+            throw new OperationException("invalid_tag_reference_query", "Use exact base tag/program names up to 256 characters, offset 0..16777216, limit 1..200 and query up to 256 characters.");
         var controller = document.Root!.Element("Controller")!;
         var programs = controller.Elements("Programs").Elements("Program").ToDictionary(p => (string)p.Attribute("Name")!, StringComparer.OrdinalIgnoreCase);
         var localTags = programs.ToDictionary(p => p.Key, p => p.Value.Elements("Tags").Elements("Tag")
@@ -36,7 +36,7 @@ public static class TagReferences
             ?? throw new OperationException("reference_tag_missing", "The selected base tag is absent from this saved snapshot.");
         var tagName = (string)target.Attribute("Name")!; var targetProgram = request.ProgramName is null ? null : (string?)targetScope!.Attribute("Name");
         var results = new List<TagReferenceOccurrence>(); var diagnostics = new List<string>();
-        var diagnosticCount = 0; var scanned = 0; var skipped = 0; var tokens = 0; long characters = 0;
+        var diagnosticCount = 0; var scanned = 0; var skipped = 0; var tokens = 0; var total = 0; long characters = 0;
         void Diagnose(string message) { diagnosticCount++; if (diagnostics.Count < 50) diagnostics.Add(message); }
         void Scan(Unit[] units, string text, string? program, string owner, string kind, string? type, string? routinePath)
         {
@@ -45,7 +45,9 @@ public static class TagReferences
             scanned += units.Length; var unitIndex = 0;
             foreach (var token in Lex(text, s => Diagnose(s + ": " + XmlProjects.PathOf(units[0].Element))))
             {
-                if (++tokens > 100000) throw new OperationException("tag_reference_limit", "Source exceeds 100000 lexical address candidates.");
+                // Lex yields one source unit at a time. The source character and
+                // nesting budgets bound work; unrelated operands consume no result storage.
+                tokens++;
                 if (!Same(token.Name, tagName)) continue;
                 // Program locals shadow controller tags. Explicit Program:Name addresses select that declaration scope.
                 var binding = token.Program ?? (program is not null && localTags[program].Contains(token.Name) ? program : null);
@@ -53,13 +55,16 @@ public static class TagReferences
                 while (unitIndex + 1 < units.Length && token.Start >= units[unitIndex + 1].Start) unitIndex++;
                 var unit = units[unitIndex]; var start = token.Start - unit.Start;
                 if (start < 0 || start + token.Length > unit.Text.Length) { Diagnose("cross_line_address_not_scanned: " + XmlProjects.PathOf(unit.Element)); continue; }
+                var operand = text.Substring(token.Start, token.Length);
+                if (!string.IsNullOrEmpty(request.Query) && !string.Join(' ', operand, program, owner, kind, token.Role, token.Status)
+                    .Contains(request.Query, StringComparison.OrdinalIgnoreCase)) continue;
+                if (total++ < request.Offset || results.Count >= request.Limit) continue;
                 var snippetStart = Math.Max(0, start - 120); var snippetEnd = Math.Min(unit.Text.Length, Math.Max(start + token.Length, snippetStart + 512));
                 var snippet = unit.Text[snippetStart..Math.Min(snippetEnd, snippetStart + 512)];
                 results.Add(new(kind, program, owner, type, routinePath, XmlProjects.PathOf(unit.Element) + (kind == "alias" ? "/@AliasFor" : ""),
-                    unit.Number, start, token.Length, unit.Text.Substring(start, token.Length), token.Role, token.Status,
+                    unit.Number, start, token.Length, operand, token.Role, token.Status,
                     snippet, snippetStart, snippetStart != 0 || snippet.Length != unit.Text.Length,
                     type == "RLL" ? unit.Element.Parent!.ElementsBeforeSelf("Rung").Count() : null));
-                if (results.Count > 10000) throw new OperationException("tag_reference_limit", "A tag exceeds 10000 candidate occurrences.");
             }
         }
         foreach (var (program, element) in programs)
@@ -93,11 +98,10 @@ public static class TagReferences
             var text = (string)alias.Attribute("AliasFor")!;
             Scan([new(alias, text, 0, null)], text, scope == controller ? null : (string?)scope.Attribute("Name"), (string?)alias.Attribute("Name") ?? "", "alias", null, null);
         }
-        var filtered = results.Where(r => string.IsNullOrEmpty(request.Query) || string.Join(' ', r.Operand, r.ProgramName, r.OwnerName, r.Kind, r.Role, r.Status)
-            .Contains(request.Query, StringComparison.OrdinalIgnoreCase)).ToArray();
-        var report = new TagReferenceReport(project, tagName, targetProgram, filtered.Length, request.Offset, request.Limit,
-            filtered.Skip(request.Offset).Take(request.Limit).ToArray(), scanned, skipped, diagnostics.ToArray(), diagnosticCount > diagnostics.Count,
-            "Lexical candidates in saved program RLL/ST text and direct AliasFor declarations. Local declarations shadow controller tags; explicit Program:Name.Tag selects that scope. Comments, quoted strings, numeric literals and call names are skipped. Dynamic index expressions are scanned separately. No compiler binding, read/write classification, type/member/bounds validation, transitive alias propagation, AOI-local scope, FBD/SFC, native where-used equivalence or controller connection. Labels/routine names/symbolic operands may share tag spelling; an empty report does not prove a tag is unused or safe to remove.");
+        var report = new TagReferenceReport(project, tagName, targetProgram, total, request.Offset, request.Limit,
+            results.ToArray(), scanned, skipped, diagnostics.ToArray(), diagnosticCount > diagnostics.Count,
+            "Lexical candidates in saved program RLL/ST text and direct AliasFor declarations. Local declarations shadow controller tags; explicit Program:Name.Tag selects that scope. Comments, quoted strings, numeric literals and call names are skipped. Dynamic index expressions are scanned separately. No compiler binding, read/write classification, type/member/bounds validation, transitive alias propagation, AOI-local scope, FBD/SFC, native where-used equivalence or controller connection. Labels/routine names/symbolic operands may share tag spelling; an empty report does not prove a tag is unused or safe to remove.",
+            request.Offset + results.Count < total ? request.Offset + results.Count : null, tokens);
         if (JsonSerializer.SerializeToUtf8Bytes(report, ProjectService.Json).Length > 4 * 1024 * 1024)
             throw new OperationException("tag_reference_page_too_large", "Response exceeds 4 MiB; use a smaller page.");
         return report;
@@ -210,8 +214,7 @@ public sealed partial class ProjectService
 {
     public TagReferenceReport FindTagReferences(string id, TagReferenceRequest request)
     {
-        var project = Get(id); Expect(project, request.ExpectedSha256);
-        if (project.Kind != "logix") throw new OperationException("not_logix", "Select a registered Logix snapshot.");
-        return TagReferences.Find(project, XmlProjects.Parse(File.ReadAllBytes(RevisionFile(id, project.Revision))), request);
+        var (project, bytes) = ReadBoundedLogixRevision(id, request.ExpectedSha256);
+        return TagReferences.Find(project, XmlProjects.ParseForAnalysis(bytes), request);
     }
 }
