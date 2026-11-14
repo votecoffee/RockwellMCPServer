@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RSLogix5000Content TargetType="Controller" ContainsContext="false" SoftwareRevision="35.00">
+  <Controller Name="ProtectedCleanupDemo">
+    <DataTypes>
+      <DataType Name="DemoString40" Family="StringFamily" Class="User">
+        <Members>
+          <Member Name="LEN" DataType="DINT" Dimension="0" Radix="Decimal"/>
+          <Member Name="DATA" DataType="SINT" Dimension="40" Radix="ASCII"/>
+        </Members>
+      </DataType>
+      <DataType Name="DemoString64" Family="StringFamily" Class="User">
+        <Members>
+          <Member Name="LEN" DataType="DINT" Dimension="0" Radix="Decimal"/>
+          <Member Name="DATA" DataType="SINT" Dimension="64" Radix="ASCII"/>
+        </Members>
+      </DataType>
+      <DataType Name="DemoString20" Family="StringFamily" Class="User">
+        <Members>
+          <Member Name="LEN" DataType="DINT" Dimension="0" Radix="Decimal"/>
+          <Member Name="DATA" DataType="SINT" Dimension="20" Radix="ASCII"/>
+        </Members>
+      </DataType>
+      <DataType Name="DemoString32" Family="StringFamily" Class="User">
+        <Members>
+          <Member Name="LEN" DataType="DINT" Dimension="0" Radix="Decimal"/>
+          <Member Name="DATA" DataType="SINT" Dimension="32" Radix="ASCII"/>
+        </Members>
+      </DataType>
+    </DataTypes>
+    <AddOnInstructionDefinitions>
+      <!-- Synthetic parameters-only projection: private locals and routines are unavailable. -->
+      <EncodedData EncodedType="AddOnInstructionDefinition" Name="ProtectedAssembly">
+        <Parameters>
+          <Parameter Name="Enable" DataType="BOOL" Usage="Input" Required="true" Visible="true"/>
+        </Parameters>
+      </EncodedData>
+      <AddOnInstructionDefinition Name="SpareInstruction">
+        <Parameters/>
+        <LocalTags/>
+        <Routines>
+          <Routine Name="Logic" Type="RLL"><RLLContent/></Routine>
+        </Routines>
+      </AddOnInstructionDefinition>
+    </AddOnInstructionDefinitions>
+    <Tags>
+      <Tag Name="AssemblyInstance" TagType="Base" DataType="ProtectedAssembly" ExternalAccess="None"/>
+      <Tag Name="Kept" TagType="Base" DataType="DINT" ExternalAccess="None">
+        <Data Format="L5K"><![CDATA[42]]></Data>
+        <Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="42"/></Data>
+      </Tag>
+    </Tags>
+    <Programs>
+      <Program Name="Example" MainRoutineName="Main">
+        <Tags/>
+        <Routines>
+          <Routine Name="Main" Type="RLL">
+            <RLLContent><Rung Number="0" Type="N"><Text><![CDATA[MOV(Kept,Kept);]]></Text></Rung></RLLContent>
+          </Routine>
+        </Routines>
+      </Program>
+    </Programs>
+  </Controller>
+</RSLogix5000Content>

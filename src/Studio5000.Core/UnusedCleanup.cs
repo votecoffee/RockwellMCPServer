@@ -177,7 +177,12 @@ internal static class UnusedCleanup
             var locals = aoi is null ? null : aoi.Elements("Parameters").Elements("Parameter").Concat(aoi.Elements("LocalTags").Elements("LocalTag")).Select(Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             Scan((string)alias.Attribute("AliasFor")!, alias, Program(alias), Owner(alias), locals);
         }
-        foreach (var opaque in controller.Descendants("EncodedData")) Unknown(Owner(opaque), XmlProjects.PathOf(opaque), "opaque-source");
+        // Public parameters are only an interface projection. Even an empty or
+        // parameters-only EncodedData element can hide LocalTags, nested UDTs
+        // and AOI calls; never infer complete closure from its visible attributes.
+        foreach (var opaque in controller.Descendants("EncodedData"))
+            Unknown(Owner(opaque), XmlProjects.PathOf(opaque), Same((string?)opaque.Attribute("EncodedType"), "AddOnInstructionDefinition")
+                ? "protected-aoi-hidden-dependencies" : "opaque-source");
         foreach (var configuration in controller.Descendants().Where(e => e.Name.LocalName is "MessageParameters" or "ProduceInfo" or "ConsumeInfo" or "Dependency"))
         {
             foreach (var attribute in configuration.Attributes()) Mentions(attribute.Value, Owner(configuration), () => XmlProjects.PathOf(configuration) + "/@" + attribute.Name.LocalName, "native-configuration-mention");

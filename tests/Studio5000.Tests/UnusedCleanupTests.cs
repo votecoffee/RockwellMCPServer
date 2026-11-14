@@ -171,6 +171,36 @@ public sealed class UnusedCleanupTests : IDisposable
         if (kind is "opaque" or "fbd") { Assert.True(report.Partial); Assert.Empty(report.Removals); }
         else Assert.Contains(report.Retentions, r => r.Reason == "safety-force-signed-or-protected");
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Parameters_only_protected_AOI_retains_unresolved_StringFamily_and_AOI_candidates(bool selectProtected)
+    {
+        var fixture = Path.Combine(AppContext.BaseDirectory, "ProtectedCleanupDemo.L5X");
+        var bytes = File.ReadAllBytes(fixture); var doc = XmlProjects.Parse(bytes);
+        var protectedAoi = doc.Descendants("EncodedData").Single();
+        Assert.NotNull(protectedAoi.Element("Parameters")); Assert.Null(protectedAoi.Element("LocalTags")); Assert.Null(protectedAoi.Element("Routines"));
+        var names = new[] { "DemoString40", "DemoString64", "DemoString20", "DemoString32" };
+        Assert.DoesNotContain(protectedAoi.Descendants().Attributes("DataType"), a => names.Contains(a.Value));
+        Assert.All(doc.Descendants("DataType"), t => Assert.Equal("StringFamily", (string?)t.Attribute("Family")));
+        var path = Path.Combine(root, "parameters-only.L5X"); File.WriteAllBytes(path, bytes);
+        var p = await service.RegisterAsync(path);
+        var candidates = names.Select(n => new UnusedCleanupSelection("udt", n)).Append(new("aoi", "SpareInstruction"));
+        if (selectProtected) candidates = candidates.Append(new("aoi", "ProtectedAssembly"));
+        var report = await service.PreviewUnusedCleanupAsync(Request(p, candidates.ToArray()));
+        Assert.True(report.Partial); Assert.False(report.CanApply); Assert.Empty(report.Removals); Assert.Null(report.ResultSha256);
+        Assert.Equal(selectProtected ? 6 : 5, report.Retentions.Length);
+        Assert.All(names, name => Assert.Contains(report.Retentions, r => r.Declaration.Selection.Name == name));
+        Assert.Contains(report.Retentions, r => r.Declaration.Selection.Name == "SpareInstruction");
+        Assert.Contains(report.Diagnostics, d => d.StartsWith("protected-aoi-hidden-dependencies:", StringComparison.Ordinal));
+        Assert.Contains(report.Dependencies, e => e.Kind == "protected-aoi-hidden-dependencies" && e.To.EndsWith("/DemoString40", StringComparison.Ordinal));
+        if (selectProtected)
+            Assert.Contains(report.Retentions, r => r.Declaration.Selection.Name == "DemoString40" && r.RequiredBy == "aoi:controller/ProtectedAssembly");
+        else
+            Assert.Contains(report.Retentions, r => r.Declaration.Selection.Name == "DemoString40" && r.RequiredBy == "retained-source");
+        Assert.Equal("unused_cleanup_blocked", (await Assert.ThrowsAsync<OperationException>(() => service.ApplyUnusedCleanupAsync(Apply(report)))).Code);
+        Assert.Equal(bytes, File.ReadAllBytes(path)); Assert.Equal(p, service.Get(p.Id)); Assert.Empty(service.SdkJobList());
+    }
     [Fact]
     public async Task Preview_and_apply_bind_scope_revision_receipt_and_review_without_replaying_unknown_attempts()
     {
