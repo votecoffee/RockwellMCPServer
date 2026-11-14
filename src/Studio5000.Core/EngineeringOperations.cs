@@ -63,6 +63,12 @@ public static class EngineeringOperations
         add("POST", "/api/module-connections/browse", (ProjectService service, ModuleConnectionBrowseRequest request, CancellationToken ct) => service.BrowseModuleConnectionsAsync(request, ct));
         add("POST", "/api/module-connections/preview", (ProjectService service, ModuleConnectionEditRequest request, CancellationToken ct) => service.PreviewModuleConnectionsAsync(request, ct));
         add("POST", "/api/module-connections/apply", (ProjectService service, ModuleConnectionApplyRequest request, CancellationToken ct) => service.ApplyModuleConnectionsAsync(request, ct));
+        add("GET", "/api/safety-io/profiles", (ProjectService service) => service.SafetyIoInstalledProfiles());
+        add("POST", "/api/safety-io/profiles/inspect", (ProjectService service, SafetyIoProfileFiles request) => service.InspectSafetyIoProfile(request));
+        add("POST", "/api/safety-io/browse", (ProjectService service, SafetyIoBrowseRequest request, CancellationToken ct) => service.BrowseSafetyIoAsync(request, ct));
+        add("POST", "/api/safety-io/preview", (ProjectService service, SafetyIoEditRequest request, CancellationToken ct) => service.PreviewSafetyIoAsync(request, ct));
+        add("POST", "/api/safety-io/apply", (ProjectService service, SafetyIoApplyRequest request, CancellationToken ct) => service.ApplySafetyIoAsync(request, ct));
+        add("GET", "/api/safety-io/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.SafetyIoStatusAsync(id, expectedSha256, ct));
         add("POST", "/api/structural-edits/context", (ProjectService service, StructuralContextRequest request, CancellationToken ct) => service.StructuralContextAsync(request, ct));
         add("POST", "/api/routine-imports/prepare", (ProjectService service, RoutineImportPackageRequest request, CancellationToken ct) => service.PrepareRoutineImportPackageAsync(request, ct));
         add("POST", "/api/program-imports/prepare", (ProjectService service, ProgramImportPackageRequest request, CancellationToken ct) => service.PrepareProgramImportPackageAsync(request, ct));

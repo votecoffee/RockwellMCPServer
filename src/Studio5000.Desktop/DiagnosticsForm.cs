@@ -24,6 +24,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
             [A("project_clone_preview", "Preview source-bound clone contract"), A("project_clone_apply", "Apply reviewed clone to new project"), A("project_clone_readback", "Compare supplied clone readback")]),
         new("Module connection timing", "Select the source project. Browse exact module/connection names, existing timing values and safety metadata; fill those identities and before-values in Preview. Supports RPI, NetworkDelayMultiplier and ReactionTimeLimit only. Safety edits block by default; explicitly choose review-only when authorized. Copy reviewSha256 into Apply to publish a separate review copy and receipt. Related values are not recalculated; native import/readback and safety acceptance remain separate.",
             [A("module_connections", "Browse connection timing and safety metadata"), A("module_connections_preview", "Preview exact connection attribute edits"), A("module_connections_apply", "Apply reviewed timing to new review copy")]),
+        new("Safety I/O point review", "Discover and pin the installed AOP identity/layout/enums, then decode the selected saved module. Copy the exact source revision/hash, configuration/profile hashes and before-values into Preview. Supports 1734-IB8S/B major 2 with one 90-byte raw L5K vector. Explicit review-only / preserve-unvalidated handling emits a separate review candidate. The original SCID tuple stays unchanged and unvalidated for changed parameters; matching native AOP configuration, save and independent readback are required. No controller or native execution.",
+            [A("safety_io_profiles", "Discover installed AOP profile and hashes"), A("safety_io_profile_inspect", "Inspect pinned profile XML files"), A("safety_io_browse", "Decode input/test-output configuration"), A("safety_io_preview", "Preview exact point changes"), A("safety_io_apply", "Create unvalidated review candidate"), A("safety_io_status", "Read retained preview/apply status")]),
         new("Scoped structural batch", "Inspect exact source revision/hash and element fingerprints. Bind the actual reviewed plan file/hash, exact routine/tag/UDT scopes and protected paths before previewing component/call edits. Untouched tag bytes and protected libraries stay preserved. Layout changes require owned tag replacements. Review dependency/safety findings and retain the preview receipt, then copy its ID/hash and review hash into Apply. Results are separate review copies. Use retained status after an uncertain response; native validation is separate.",
             [A("structural_edit_context", "Inspect exact fingerprints (single or batch paths)"), A("structural_edit_preview", "Retain reviewed structural preview"), A("structural_edit_apply", "Apply exact retained preview to new copy"), A("structural_edit_status", "Read retained preview/apply status")]),
         new("Captured rung explanation", "Freeze saved values or an existing sample, then evaluate a rung using the returned capture ID/hash and the exact routine XPath. Conditions are true, false or unknown. This explains captured predicates; it does not simulate controller execution.",
@@ -119,6 +121,9 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var clone = new ProjectCloneRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), "Reviewed clone", [], []);
         var connections = new ModuleConnectionEditRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", [new("", "", "RPI", "", "")]);
         var structural = new StructuralEditRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, new("", ""), new([], [], []), []);
+        var safetyProfile = new SafetyIoProfileFiles(new("", ""), new("", ""));
+        var safetySource = new SafetyIoBrowseRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, "", safetyProfile, "");
+        var safetyEdit = new SafetyIoEditRequest(safetySource, "", [], []);
         object? request = operation switch
         {
             "studio_timer_ownership_audit" => new TimerOwnershipRequest(p?.CurrentSha256 ?? ""),
@@ -133,6 +138,10 @@ public sealed class DiagnosticsForm : WorkspaceForm
             "studio_module_connections" => new ModuleConnectionBrowseRequest(p?.Id ?? "", p?.CurrentSha256 ?? ""),
             "studio_module_connections_preview" => connections,
             "studio_module_connections_apply" => new ModuleConnectionApplyRequest(connections, ""),
+            "studio_safety_io_profile_inspect" => safetyProfile,
+            "studio_safety_io_browse" => safetySource,
+            "studio_safety_io_preview" => safetyEdit,
+            "studio_safety_io_apply" => new SafetyIoApplyRequest(safetyEdit, "", "", ""),
             "studio_structural_edit_context" => new StructuralContextRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0),
             "studio_structural_edit_preview" => structural,
             "studio_structural_edit_apply" => new StructuralApplyRequest(structural, "", "", ""),

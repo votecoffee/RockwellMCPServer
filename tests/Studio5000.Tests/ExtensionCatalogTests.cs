@@ -11,7 +11,7 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(175, operations.Length); Assert.Equal(175, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(181, operations.Length); Assert.Equal(181, operations.Select(o => o.Name).Distinct().Count());
         foreach (var name in new[] { "studio_timer_ownership_audit", "studio_timer_reference_rename_preview" }) Assert.Equal("read", operations.Single(o => o.Name == name).Effect);
         var timerRename = operations.Single(o => o.Name == "studio_timer_reference_rename_preview").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
         foreach (var name in new[] { "expectedSha256", "expectedAuditSha256", "ownerId", "newTagName", "consumerRoutineXPaths" }) Assert.True(timerRename.TryGetProperty(name, out _));
@@ -43,6 +43,12 @@ public sealed class ExtensionCatalogTests
         Assert.Equal("read", operations.Single(o => o.Name == "studio_module_connections").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_module_connections_preview").Effect);
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_module_connections_apply").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_safety_io_profiles").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_safety_io_profile_inspect").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_safety_io_browse").Effect);
+        Assert.Equal("preview", operations.Single(o => o.Name == "studio_safety_io_preview").Effect);
+        Assert.Equal("apply", operations.Single(o => o.Name == "studio_safety_io_apply").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_safety_io_status").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_controller_tag_rename_preview").Effect);
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_controller_tag_rename_apply").Effect);
         foreach (var prefix in new[] { "ftview", "viewdesigner" })

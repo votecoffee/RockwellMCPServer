@@ -32,6 +32,8 @@ Scoped structural reviews can inspect up to 128 exact element paths in one conte
 
 Full-export tag removal streams bounded source and checks exact removed names/scopes. Protected AOIs with hidden bodies block UDT removal or layout changes; visible parameters do not prove their private dependencies absent. Reviewed tag-only batches retain library and native configuration bytes.
 
+Saved **1734-IB8S/B** point review decodes pinned installed AOP layouts/enums and previews explicit input mode/test-source and test-output changes. Apply creates a separate byte-preserved review candidate, with the original configuration-signature tuple retained and explicitly unvalidated for changed parameters. Native AOP configuration/save/readback remains required; see [safety I/O configuration](docs/SAFETY_MODULE_CONFIGURATION.md).
+
 The plugin identifier is `rockwell-mcp-server`. Internal `Studio5000.*` assemblies, environment variables and existing tool names remain for compatibility.
 
 Application releases use a fixed `YY.MMDD.HHmmss` timestamp in `America/New_York`, currently **26.1104.014753**. Package identities remove leading numeric zeros when required; the padded display timestamp stays in release metadata. See [release versioning](docs/VERSIONING.md) for package and .NET mappings.
