@@ -30,6 +30,8 @@ The optional [low-resident Windows launcher](docs/STABLE_LAUNCHER.md#optional-wi
 
 Scoped structural reviews can inspect up to 128 exact element paths in one context request, retaining source/value fingerprints and protected flags while reducing repeated client calls. The GUI exposes this under **Diagnostics & workflows → Scoped structural batch**; see the [structural workflow](workflows/rockwell-engineering/references/structural-edits.md).
 
+Full-export tag removal streams bounded source and checks exact removed names/scopes. Protected AOIs with hidden bodies block UDT removal or layout changes; visible parameters do not prove their private dependencies absent. Reviewed tag-only batches retain library and native configuration bytes.
+
 The plugin identifier is `rockwell-mcp-server`. Internal `Studio5000.*` assemblies, environment variables and existing tool names remain for compatibility.
 
 Application releases use a fixed `YY.MMDD.HHmmss` timestamp in `America/New_York`, currently **26.1104.014753**. Package identities remove leading numeric zeros when required; the padded display timestamp stays in release metadata. See [release versioning](docs/VERSIONING.md) for package and .NET mappings.

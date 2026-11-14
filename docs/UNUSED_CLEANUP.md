@@ -34,6 +34,8 @@ Tags with `ExternalAccess` missing or other than explicit `None` are retained. P
 
 A surviving `EncodedData EncodedType="AddOnInstructionDefinition"` is an unresolved dependency root even if it exposes `Parameters` and has no encoded text. Its private LocalTags, nested types and AOI calls are unavailable. All selected possible dependencies remain retained, including StringFamily UDTs with no visible references. The preview reports `protected-aoi-hidden-dependencies` and `partial: true`; it does not claim complete closure from public parameter attributes. This applies both when the protected AOI is outside the candidate list and when it is selected but retained by protection rules. [ProtectedCleanupDemo.L5X](../examples/ProtectedCleanupDemo.L5X) models this parameters-only projection with four apparently unused StringFamily types and a spare AOI. It is synthetic saved-file evidence, not a native-import fixture or acceptance result.
 
+The separate [structural workflow](../workflows/rockwell-engineering/references/structural-edits.md) also blocks UDT removal/layout changes when surviving protected AOIs can hide consumers. Its target-filtered removal scanner supports independently reviewed tag-only batches on full exports without a source-wide 100000-token ceiling, while retaining source-text and related-finding budgets, explicit scope/state dispositions and protected-byte checks.
+
 Preview retains an immutable JSON `previewReceipt`. Review `removals`, `retentions`, `dependencies`, `partial`, `preservation` and `resultSha256`, then call `studio_unused_cleanup_apply` with:
 
 ```json

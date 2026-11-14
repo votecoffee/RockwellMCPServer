@@ -54,6 +54,70 @@ public sealed class StructuralEditTests : IDisposable
     }
 
     [Fact]
+    public async Task Full_export_tag_removal_streams_unrelated_operands_and_preserves_libraries_and_axis_bytes()
+    {
+        var path = Path.Combine(root, "full-structural.L5X"); FullControllerReviewTests.WriteController(path, true);
+        var original = File.ReadAllText(path).Replace("XIC(Requested)OTE(Enabled);", string.Concat(Enumerable.Repeat("XIC(Requested)", 8)) + "OTE(Enabled);", StringComparison.Ordinal);
+        var tags = Enumerable.Range(0, 5).Select(i => $"<Tag Name='Spare{i}' TagType='Base' DataType='DINT' ExternalAccess='None'><Data Format='L5K'><![CDATA[{i}\r\n]]></Data><Data Format='Decorated'><DataValue DataType='DINT' Value='{i}'/></Data></Tag>").ToArray();
+        var library = "<AddOnInstructionDefinitions><EncodedData EncodedType='AddOnInstructionDefinition' Name='ProtectedLibrary'><Parameters><Parameter Name='Enable' DataType='BOOL'/></Parameters></EncodedData></AddOnInstructionDefinitions>";
+        var axis = "<MotionGroups><MotionGroup Name='Motion'><Axes><Axis Name='Axis1' AxisType='AXIS_CIP_DRIVE' CatalogNumber='Synthetic'><NativeData><![CDATA[axis native bytes $N\r\n[1,2,3]]]></NativeData></Axis></Axes></MotionGroup></MotionGroups>";
+        original = original.Replace("<Programs>", library + axis + "<Programs>", StringComparison.Ordinal)
+            .Replace("<Program Name=\"P003_Mode\" MainRoutineName=\"Main\"><Tags>", "<Program Name=\"P003_Mode\" MainRoutineName=\"Main\"><Tags>" + string.Concat(tags), StringComparison.Ordinal);
+        File.WriteAllText(path, original, new UTF8Encoding(true)); var p = await service.RegisterAsync(path);
+        string Target(int i) => "/RSLogix5000Content/Controller/Programs/Program[@Name='P003_Mode']/Tags/Tag[@Name='Spare" + i + "']";
+        var selectors = Enumerable.Range(0, 5).Select(Target).Concat(new[] { "/RSLogix5000Content/Controller/DataTypes", "/RSLogix5000Content/Controller/AddOnInstructionDefinitions", "/RSLogix5000Content/Controller/MotionGroups" }).ToArray();
+        var context = await service.StructuralContextAsync(new(p.Id, p.CurrentSha256, p.Revision, XPaths: selectors));
+        var edits = context.Targets.Take(5).Select(t => new StructuralEdit("remove_element", t.XPath, t.ElementSha256)).ToArray();
+        var selectedTags = Enumerable.Range(0, 5).Select(i => new StructuralTagScope("Spare" + i, "P003_Mode")).ToArray();
+        var scope = new StructuralScope([], selectedTags, [], Protected: context.Targets.Skip(5).Select(t => new StructuralProtection(t.XPath, t.ElementSha256)).ToArray(),
+            AcknowledgeIncompleteBindings: true, ValueDispositions: selectedTags.Select(t => new StructuralValueDisposition(t, "remove", "Synthetic reviewed unused-tag saved-state removal.")).ToArray());
+        var preview = await service.PreviewStructuralEditsAsync(new(p.Id, p.CurrentSha256, p.Revision, plan, scope, edits));
+        Assert.True(preview.CanApply, JsonSerializer.Serialize(preview.Findings)); Assert.Equal(5, preview.Changes.Length);
+        Assert.True(preview.Preservation.UnselectedBytesPreserved); Assert.True(preview.Preservation.ProtectedSubtrees >= 3);
+        var applied = await service.ApplyStructuralEditsAsync(Apply(preview));
+        var expected = original; foreach (var tag in tags) expected = expected.Replace(tag, "", StringComparison.Ordinal);
+        var expectedBytes = new UTF8Encoding(true).GetPreamble().Concat(Encoding.UTF8.GetBytes(expected)).ToArray();
+        Assert.Equal(expectedBytes, File.ReadAllBytes(service.Download(applied.Candidate.Id).Path));
+        Assert.Equal(new UTF8Encoding(true).GetPreamble().Concat(Encoding.UTF8.GetBytes(original)).ToArray(), File.ReadAllBytes(path));
+        Assert.Equal(p, service.Get(p.Id)); Assert.Empty(service.SdkJobList());
+    }
+
+    [Fact]
+    public async Task Selected_reference_after_100000_unrelated_ST_operands_still_blocks_removal()
+    {
+        var source = Source().Replace("<Tags />", "<Tags><Tag Name='A' TagType='Base' DataType='DINT'><Data Format='L5K'><![CDATA[7]]></Data></Tag></Tags>", StringComparison.Ordinal)
+            .Replace("</Routines></Program>", "<Routine Name='Tail' Type='ST'><STContent><Line><![CDATA[" + string.Concat(Enumerable.Repeat("Keep:=1;", 100001)) + "A:=1;]]></Line></STContent></Routine></Routines></Program>", StringComparison.Ordinal);
+        var p = await Register(source);
+        var edit = await Edit(p, "remove_element", "/RSLogix5000Content/Controller/Programs/Program[@Name='App']/Tags/Tag[@Name='A']");
+        var request = Request(p, edit); request = request with { Scope = request.Scope with { ValueDispositions = [new(new("A", "App"), "remove", "Synthetic candidate; still referenced at the end of a large routine.")] } };
+        var preview = await service.PreviewStructuralEditsAsync(request);
+        Assert.False(preview.CanApply); Assert.Contains(preview.Findings, f => f.Check == "removed-tag-reference" && f.Detail.Contains("A", StringComparison.Ordinal));
+        Assert.Equal("structural_blocked", (await Assert.ThrowsAsync<OperationException>(() => service.ApplyStructuralEditsAsync(Apply(preview)))).Code);
+    }
+
+    [Fact]
+    public async Task Protected_parameters_do_not_prove_a_removed_UDT_has_no_hidden_layout_consumers()
+    {
+        var fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "ProtectedCleanupDemo.L5X"));
+        var p = await Register(fixture);
+        var edit = await Edit(p, "remove_element", "/RSLogix5000Content/Controller/DataTypes/DataType[@Name='DemoString40']");
+        var scope = new StructuralScope([], [], ["DemoString40"], AcknowledgeIncompleteBindings: true);
+        var preview = await service.PreviewStructuralEditsAsync(new(p.Id, p.CurrentSha256, p.Revision, plan, scope, [edit]));
+        Assert.False(preview.CanApply);
+        Assert.Contains(preview.Findings, f => f.Check == "protected-hidden-layout-dependency");
+    }
+    [Fact]
+    public async Task Streamed_target_findings_remain_bounded()
+    {
+        var source = Source().Replace("JSR(Old,0);MOV(Keep,Keep);", string.Concat(Enumerable.Repeat("MOV(Keep,Keep)", 1001)) + ";", StringComparison.Ordinal);
+        var p = await Register(source); var edit = await Edit(p, "remove_element", Tag("Keep"));
+        var request = Request(p, edit); request = request with { Scope = request.Scope with { ValueDispositions = [new(new("Keep"), "remove", "Synthetic over-budget related references.")] } };
+        var error = await Assert.ThrowsAsync<OperationException>(() => service.PreviewStructuralEditsAsync(request));
+        Assert.Equal("structural_limit", error.Code); Assert.Contains("2000 dependency findings", error.Message);
+        Assert.Equal(p, service.Get(p.Id)); Assert.Single(service.Projects());
+    }
+
+    [Fact]
     public async Task New_structural_receipts_identify_the_actual_producer_and_tool_version()
     {
         var p = await Register(); var preview = await service.PreviewStructuralEditsAsync(Request(p, await Edit(p, "set_text", MainText, "NOP();")));

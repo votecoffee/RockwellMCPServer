@@ -31,6 +31,9 @@ internal static partial class StructuralEditing
         foreach (var node in Protected(before))
         foreach (var attribute in node.DescendantsAndSelf().Attributes("DataType").Where(a => affected.Contains(a.Value) || removedTypes.Contains(a.Value)))
             Finding("blocked", "protected-layout-dependency", XmlProjects.PathOf(attribute.Parent!), "Protected library/configuration depends on an edited UDT layout: " + attribute.Value + ".");
+        if (removedTypes.Count > 0 || affected.Count > 0)
+            foreach (var opaque in after.Descendants("EncodedData").Where(e => Same((string?)e.Attribute("EncodedType"), "AddOnInstructionDefinition")))
+                Finding("blocked", "protected-hidden-layout-dependency", XmlProjects.PathOf(opaque), "A surviving protected AOI can hide LocalTags and transitive UDT dependencies. Public parameters cannot establish that removed/changed layouts are unused. Preserve the library definitions; acknowledgeIncompleteBindings does not override this block.");
 
         var oldPrograms = before.Root!.Element("Controller")!.Elements("Programs").Elements("Program").ToArray(); var programs = after.Root!.Element("Controller")!.Elements("Programs").Elements("Program").ToArray();
         long characters = 0;
@@ -66,21 +69,24 @@ internal static partial class StructuralEditing
         var removedNames = removedTags.Select(t => Name(t.Value)!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var beforeLocals = oldPrograms.ToDictionary(p => Name(p)!, p => p.Elements("Tags").Elements("Tag").Select(Name).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         var afterLocals = programs.ToDictionary(p => Name(p)!, p => p.Elements("Tags").Elements("Tag").Select(Name).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
-        var removedKeys = removedTags.Select(t => t.Key).ToHashSet(StringComparer.OrdinalIgnoreCase); var tokens = 0;
+        var removedKeys = removedTags.Select(t => t.Key).ToHashSet(StringComparer.OrdinalIgnoreCase); long referenceCharacters = 0;
         void References(string code, string? program, string location, bool alias)
         {
-            var diagnostics = new List<string>(); var masked = new string(TagReferences.MaskSource(code, diagnostics.Add));
-            if (code.Length > 1024 * 1024) throw new OperationException("structural_limit", "A reference source exceeds 1 MiB.");
-            var symbols = Regex.Matches(masked, @"(?<![A-Za-z0-9_])(?:JSR|JMP|LBL|EVENT)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)).Select(m => (Start: m.Groups[1].Index, Length: m.Groups[1].Length)).ToArray();
-            foreach (var token in TagReferences.Lex(code, diagnostics.Add))
+            if (code.Length > 1024 * 1024 || (referenceCharacters += code.Length) > 32 * 1024 * 1024)
+                throw new OperationException("structural_limit", "Reference scanning supports 1 MiB per routine/alias and 32 MiB total source text.");
+            var diagnostic = false; var masked = new string(TagReferences.MaskSource(code, _ => diagnostic = true));
+            var symbols = Regex.Matches(masked, @"(?<![A-Za-z0-9_])(?:JSR|JMP|LBL|EVENT)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1))
+                .Where(m => removedNames.Contains(m.Groups[1].Value)).Select(m => (Start: m.Groups[1].Index, Length: m.Groups[1].Length)).ToHashSet();
+            foreach (var token in TagReferences.Lex(code, _ => diagnostic = true))
             {
-                if (++tokens > 100000) throw new OperationException("structural_limit", "More than 100000 reference tokens.");
-                if (!removedNames.Contains(token.Name) || (!alias && symbols.Any(s => token.Start == s.Start && token.Name.Length == s.Length))) continue;
+                // Stream all bounded source, but retain/check only exact removed
+                // names and scopes. Unrelated operands need no global token counter.
+                if (!removedNames.Contains(token.Name) || (!alias && symbols.Contains((token.Start, token.Name.Length)))) continue;
                 var local = program is not null && (afterLocals.GetValueOrDefault(program)?.Contains(token.Name) == true || beforeLocals.GetValueOrDefault(program)?.Contains(token.Name) == true);
                 var binding = token.Program ?? (local ? program : null);
                 if (removedKeys.Contains(Key(binding, token.Name))) Finding("blocked", "removed-tag-reference", location, "Lexical operand/alias still addresses a removed tag or would capture another scope: " + code.Substring(token.Start, token.Length) + ".");
             }
-            if (diagnostics.Count > 0 && removedNames.Any(n => Regex.IsMatch(masked, @"(?<![A-Za-z0-9_])" + Regex.Escape(n) + @"(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))) Finding("blocked", "reference-unsupported", location, "Unresolved source syntax touches a removed tag; review the exact binding.");
+            if (diagnostic && removedNames.Any(n => Regex.IsMatch(masked, @"(?<![A-Za-z0-9_])" + Regex.Escape(n) + @"(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))) Finding("blocked", "reference-unsupported", location, "Unresolved source syntax touches a removed tag; review the exact binding.");
         }
         foreach (var program in programs)
         foreach (var routine in program.Elements("Routines").Elements("Routine"))
