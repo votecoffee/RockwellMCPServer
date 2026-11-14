@@ -215,6 +215,8 @@ Use **Tag / UDT browser…** to search tags, expand structures/arrays and create
 
 Use **PLC where used…**, **Where used…** in the tag browser, or **Where used in PLC…** on a matched HMI reference to inspect saved RLL/ST candidates and direct alias declarations. Results show source locations and distinguish indirect index expressions. Open a selected RLL candidate in the ladder viewer with its snapshot hash and exact rung position. These lexical checks do not establish compiler binding or prove a tag is unused. See [tag where-used coverage](docs/TAG_REFERENCES.md).
 
+Full-export exact where-used scans stream unrelated operands and retain only the requested page. For explicit tag/UDT/AOI removal candidates, the [reviewed cleanup workflow](docs/UNUSED_CLEANUP.md) retains dependency closure, HMI/external decisions, Produced/Consumed and protected objects, then creates a separate review copy with exact-byte preservation and receipts.
+
 **Extensions…** exposes the live catalog, operation forms, reload and jobs. Compatible extension updates can be reloaded without restarting Codex. Shared host, SDK binding or contract changes can require a service restart; see [extension updating and rollback](docs/EXTENSIONS.md). Generic MCP calls accept an argument object or its serialized JSON-object string; see [MCP argument handling](docs/MCP_ARGUMENTS.md).
 
 Bundled stateless proxy packages opt into releasing idle worker processes after catalog discovery and completed invocations. This requires the matching updated host and package manifests; legacy stateful extensions keep their existing lifetime. See [extension worker lifetime](docs/EXTENSIONS.md).

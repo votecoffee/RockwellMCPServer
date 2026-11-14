@@ -11,7 +11,7 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(166, operations.Length); Assert.Equal(166, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(175, operations.Length); Assert.Equal(175, operations.Select(o => o.Name).Distinct().Count());
         foreach (var name in new[] { "studio_timer_ownership_audit", "studio_timer_reference_rename_preview" }) Assert.Equal("read", operations.Single(o => o.Name == name).Effect);
         var timerRename = operations.Single(o => o.Name == "studio_timer_reference_rename_preview").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
         foreach (var name in new[] { "expectedSha256", "expectedAuditSha256", "ownerId", "newTagName", "consumerRoutineXPaths" }) Assert.True(timerRename.TryGetProperty(name, out _));
@@ -37,6 +37,9 @@ public sealed class ExtensionCatalogTests
         Assert.Equal("preview", operations.Single(o => o.Name == "studio_structural_edit_preview").Effect);
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_structural_edit_apply").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_structural_edit_status").Effect);
+        Assert.Equal("preview", operations.Single(o => o.Name == "studio_unused_cleanup_preview").Effect);
+        Assert.Equal("apply", operations.Single(o => o.Name == "studio_unused_cleanup_apply").Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_unused_cleanup_status").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_module_connections").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_module_connections_preview").Effect);
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_module_connections_apply").Effect);
@@ -91,6 +94,6 @@ public sealed class ExtensionCatalogTests
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_validation_record").Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_legacy_review_preview").Effect);
         Assert.Equal("apply", operations.Single(o => o.Name == "studio_legacy_review_prepare").Effect);
-        Assert.Contains("keep current values", operations.Single(o => o.Name == "studio_logic_value_merge_preview").Description);
+        Assert.Contains("Preserve fresh saved tag records", operations.Single(o => o.Name == "studio_logic_value_merge_preview").Description);
     }
 }

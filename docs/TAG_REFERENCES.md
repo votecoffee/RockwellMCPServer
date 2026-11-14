@@ -21,7 +21,7 @@ Omit/null `programName` for a controller tag. The exact base declaration must ex
 
 Discover/describe the `logix` operation `studio_tag_references` through the stable extension bridge and invoke it with `studio_extensions_read`. Arguments are `{ "projectId": "...", "request": { ...the body above... } }`. The fixed MCP tool list stays unchanged.
 
-`query` filters operand text, source program/owner, kind, role or status. `total` counts matching occurrences before paging. Each result includes `sourceXPath`, `start`, `length`, `operand`, `snippet`, `snippetStart` and `snippetTruncated`. Offsets refer to the selected text element's value, or the alias attribute value. Positional XPath selectors distinguish duplicate rung/line numbers. `routineXPath` and the zero-based `rungIndex` allow the matching RLL rung to be opened in the ladder viewer.
+`query` filters operand text, source program/owner, kind, role or status. `total` counts matching occurrences before paging. Resume with `nextOffset` and the identical query/hash. `scannedCandidates` counts the streamed lexical operands, including unrelated names; only the requested matching page is retained. Each result includes `sourceXPath`, `start`, `length`, `operand`, `snippet`, `snippetStart` and `snippetTruncated`. Offsets refer to the selected text element's value, or the alias attribute value. Positional XPath selectors distinguish duplicate rung/line numbers. `routineXPath` and the zero-based `rungIndex` allow the matching RLL rung to be opened in the ladder viewer.
 
 ## Desktop
 
@@ -41,6 +41,8 @@ Alias targets are direct occurrences only: searching the base tag does not expan
 
 ## Limits and validation
 
-Limits: 200 results per page, 256 query/name characters, 64 KiB per rung, 1 MiB per routine scan, 16 MiB scanned text, 100000 lexical candidates, 10000 matching occurrences, 4096 address characters, 16 array-expression levels, 32 comment levels, 50 diagnostics and a 4 MiB encoded response. Oversized scans return `tag_reference_limit`; invalid paging returns `invalid_tag_reference_query`; oversized replies return `tag_reference_page_too_large`.
+Limits: 64 MiB per saved export, 1000000 XML elements, 64 XML nesting levels, 200 results per page, 256 query/name characters, offset 0..16777216, 64 KiB per rung, 1 MiB per ST routine scan, 16 MiB scanned text, 4096 address characters, 16 array-expression levels, 32 comment levels, 50 diagnostics and a 4 MiB encoded response. Unrelated lexical candidates and total matches have no separate source-wide count ceiling: the text budget bounds scanning and the requested page bounds stored rows. Oversized scans return `tag_reference_limit`; invalid paging returns `invalid_tag_reference_query`; oversized replies return `tag_reference_page_too_large` and can be retried as a read with a smaller page. XML analysis limits remain enforced before indexing.
+
+For reviewed whole-declaration removal, use the separate [dependency-closed cleanup workflow](UNUSED_CLEANUP.md). An empty where-used page alone is insufficient evidence for deletion.
 
 [ReferencesDemo.L5X](../examples/ReferencesDemo.L5X) is a generated fixture with local/controller shadowing, RLL/ST, indirect indices and an alias. Unit checks cover source selectors, literals/comments, unsupported syntax, scope and resource bounds. Integration checks exercise the same operation through authenticated REST and the unchanged MCP bridge. These checks establish local scan behavior, not native Studio acceptance.

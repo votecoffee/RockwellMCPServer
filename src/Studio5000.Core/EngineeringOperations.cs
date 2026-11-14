@@ -70,6 +70,9 @@ public static class EngineeringOperations
         add("POST", "/api/program-imports/readback", (ProjectService service, ProgramImportReadbackRequest request) => service.CheckProgramImportReadback(request));
         add("POST", "/api/structural-edits/context/batch", (ProjectService service, StructuralContextRequest request, CancellationToken ct) => service.StructuralContextAsync(request, ct));
         add("POST", "/api/structural-edits/preview", (ProjectService service, StructuralEditRequest request, CancellationToken ct) => service.PreviewStructuralEditsAsync(request, ct));
+        add("POST", "/api/unused-cleanup/preview", (ProjectService service, UnusedCleanupRequest request, CancellationToken ct) => service.PreviewUnusedCleanupAsync(request, ct));
+        add("POST", "/api/unused-cleanup/apply", (ProjectService service, UnusedCleanupApplyRequest request, CancellationToken ct) => service.ApplyUnusedCleanupAsync(request, ct));
+        add("GET", "/api/unused-cleanup/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.UnusedCleanupStatusAsync(id, expectedSha256, ct));
         add("POST", "/api/structural-edits/apply", (ProjectService service, StructuralApplyRequest request, CancellationToken ct) => service.ApplyStructuralEditsAsync(request, ct));
         add("GET", "/api/structural-edits/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.StructuralEditStatusAsync(id, expectedSha256, ct));
         add("POST", "/api/logix-validation/preview", (ProjectService service, LogixValidationRequest request, CancellationToken ct) => service.PreviewLogixValidationAsync(request, ct));
