@@ -10,11 +10,11 @@ return EngineeringCli.Execute(args);
 
 internal sealed record CliProblem(string Code, string Message);
 internal sealed record WorkerReply(JsonElement? Result, CliProblem? Error);
-internal sealed record CliRequest(string Operation, string Input, int TimeoutSeconds, bool CancelOnEof);
+internal sealed record CliRequest(string Operation, string Input, int TimeoutSeconds, bool CancelOnEof, byte[]? PinnedRequest = null);
 
 internal static class EngineeringCli
 {
-    internal const string Version = "2.5.0";
+    internal const string Version = "2.5.1";
     internal const string JobEnvironment = "ROCKWELL_ENGINEERING_OWNED_JOB";
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { MaxDepth = 128 };
     internal static readonly JsonSerializerOptions StrictJson = new(Json)
@@ -24,7 +24,8 @@ internal static class EngineeringCli
     internal static int Execute(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
-        if (args is ["--owned-worker", var operation, var input]) return RunWorker(operation, input);
+        if (args is ["--owned-worker", var operation, var input, var deadline] && int.TryParse(deadline, out var seconds) && seconds is >= 1 and <= 300)
+            return RunWorker(operation, input, seconds);
         if (args.Length == 0 || args is ["--help"] or ["-h"])
         {
             Console.WriteLine("""
@@ -42,7 +43,8 @@ internal static class EngineeringCli
                   run --request <absolute JSON path> [--timeout-seconds 1..300]
                   --version
 
-                Job commands emit one JSON result. Timeout defaults to 30 seconds.
+                Job commands emit one JSON result. Saved-file timeout defaults to 30 seconds;
+                native-enabled run and pilot commands default to 300 seconds.
                 Use operation-help run for the workspace request format and native opt-in.
                 """);
             return 0;
@@ -91,14 +93,14 @@ internal static class EngineeringCli
         }
     }
 
-    private static CliRequest Parse(string[] args)
+    internal static CliRequest Parse(string[] args)
     {
         var operation = args[0];
         var inputOption = operation switch { "l5x-summary" => "--input",
             "l5x-inspect" or "l5x-preview" or "l5x-apply" or "sdk-offline" or "sdk-read-export" or "sdk-read-export-plan" or "run" => "--request",
             _ => throw new OperationException("unknown_operation", "Use operations or --help to list the supported commands.") };
         string? input = null;
-        var timeout = 30;
+        int? timeout = null;
         var cancelOnEof = false;
         var options = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i++)
@@ -113,7 +115,11 @@ internal static class EngineeringCli
             else throw new OperationException("invalid_arguments", $"Invalid option or value for {option}.");
         }
         if (input is null) throw new OperationException("invalid_arguments", $"Supply {inputOption} with an absolute file path.");
-        return new(operation, input, timeout, cancelOnEof);
+        var pinned = operation == "run" ? L5xSummary.ReadBytes(input, 2 * 1024 * 1024) : null;
+        var nativeWorkspace = pinned is not null && WorkspaceRun.AllowsNative(pinned);
+        var resolved = timeout ?? (nativeWorkspace || operation is "sdk-offline" or "sdk-read-export" ? 300 : 30);
+        if (nativeWorkspace) _ = WorkspaceRun.NativeWorkerTimeout(resolved);
+        return new(operation, input, resolved, cancelOnEof, pinned);
     }
 
     private static int RunJob(CliRequest request)
@@ -143,9 +149,17 @@ internal static class EngineeringCli
             var receipt = Path.Combine(job, "result.json");
             WriteNew(Path.Combine(job, "intent.json"), new { jobId = id, request.Operation, request.Input,
                 request.TimeoutSeconds, createdUtc = DateTimeOffset.UtcNow });
+            var workerInput = request.Input;
+            if (request.PinnedRequest is { } pinned)
+            {
+                workerInput = Path.Combine(job, "request.json");
+                using var snapshot = new FileStream(workerInput, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                snapshot.Write(pinned);
+                snapshot.Flush(true);
+            }
             var start = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("The apphost path is unavailable."))
             { UseShellExecute = false, WorkingDirectory = job };
-            foreach (var argument in new[] { "--owned-worker", request.Operation, request.Input }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "--owned-worker", request.Operation, workerInput, request.TimeoutSeconds.ToString(CultureInfo.InvariantCulture) }) start.ArgumentList.Add(argument);
             start.Environment[JobEnvironment] = job;
             var worker = OwnedCommand.Run(job, start, null, stop.Token);
             WorkerReply? reply = null;
@@ -171,17 +185,20 @@ internal static class EngineeringCli
             }
             var input = reply?.Result is { ValueKind: JsonValueKind.Object } payload && payload.TryGetProperty("input", out var fingerprint)
                 ? (JsonElement?)fingerprint : null;
+            var sdkReferences = SdkJobWait.References(job);
+            var recovery = sdkReferences.Length == 0 ? null : new { sdkJobReferences = sdkReferences, automaticRetry = false,
+                reviewRequired = code != 0, instruction = "Inspect the SDK job records, native lifecycle and pending markers before another native dispatch. Process cleanup alone does not establish native close." };
             WriteNew(receipt, new { jobId = id, request.Operation, sourcePath = request.Input, input, exitCode = code,
                 error = problem, worker.Cleanup, worker.ResourceId, worker.Child, workerExitCode = worker.ExitCode,
                 invocation = File.Exists(Path.Combine(job, "invocation.json")) ? Path.Combine(job, "invocation.json") : null,
                 steps = Directory.Exists(Path.Combine(job, "steps")) ? Path.Combine(job, "steps") : null,
-                finishedUtc = DateTimeOffset.UtcNow });
-            return Report(code, request.Operation, id, receipt, worker.Cleanup, code == 0 ? reply?.Result : null, problem);
+                recovery, finishedUtc = DateTimeOffset.UtcNow });
+            return Report(code, request.Operation, id, receipt, worker.Cleanup, code == 0 ? reply?.Result : null, problem, recovery);
         }
         finally { Console.CancelKeyPress -= cancel; }
     }
 
-    private static int RunWorker(string operation, string input)
+    private static int RunWorker(string operation, string input, int timeoutSeconds)
     {
         try
         {
@@ -204,7 +221,7 @@ internal static class EngineeringCli
                 "l5x-apply" => L5xWorkflow.Apply(job, input),
                 "sdk-read-export-plan" => SdkReadExport.Plan(input),
                 "sdk-offline" or "sdk-read-export" => NativePilot.Run(job, input, operation == "sdk-read-export"),
-                "run" => WorkspaceRun.ExecuteAsync(job, input).GetAwaiter().GetResult(),
+                "run" => WorkspaceRun.ExecuteAsync(job, input, timeoutSeconds).GetAwaiter().GetResult(),
                 _ => throw new OperationException("unknown_operation", "Unsupported worker operation.")
             };
             Print(new WorkerReply(JsonSerializer.SerializeToElement(result, Json), null));
@@ -227,11 +244,11 @@ internal static class EngineeringCli
         IOException => "io_error", _ => "operation_failed"
     }, error.Message.Length > 1000 ? error.Message[..1000] : error.Message);
 
-    private static int Report(int exitCode, string operation, string? jobId, string? receipt, string cleanup, JsonElement? result, CliProblem? error)
+    private static int Report(int exitCode, string operation, string? jobId, string? receipt, string cleanup, JsonElement? result, CliProblem? error, object? recovery = null)
     {
         if (error is not null) Console.Error.WriteLine($"{error.Code}: {error.Message}");
         Print(new { schemaVersion = 1, version = Version, operation, jobId,
-            status = exitCode == 0 ? "succeeded" : "error", exitCode, result, error, cleanup, receipt });
+            status = exitCode == 0 ? "succeeded" : "error", exitCode, result, error, cleanup, receipt, recovery });
         return exitCode;
     }
 

@@ -4,6 +4,7 @@
     <AssemblyName>Rockwell.EngineeringCli</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Studio5000.Tests" />
     <ProjectReference Include="../Studio5000.Core/Studio5000.Core.csproj" />
     <ProjectReference Include="../Studio5000.Extensions.Rockwell/Studio5000.Extensions.Rockwell.csproj" />
   </ItemGroup>

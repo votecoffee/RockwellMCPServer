@@ -12,6 +12,62 @@ Use the same CLI workspace for all steps. Discover the exact schema with `operat
 
 The plan, preview and record commands work with native execution disabled. Only the SDK job starts a native worker.
 
+## Bounded offline ACD-to-L5X
+
+This paired workflow is also the supported installed CLI route when only a detailed native L5X is needed from an ACD. It exports both formats without needing a scalar tag name or `native-pilot.json`. Use a separate review workspace, one exact saved source, its SHA-256 and the intended matching Logix major revision. A plan hashes the ACD but does not authenticate its native format or installed engine. Native open/readback remains the version-specific acceptance check.
+
+First discover `operation-help run`, `studio_sdk_service_status`, `studio_bound_l5k_plan` and `studio_sdk_start_job`. Read SDK service status without `allowNative`. If the service is stopped, have its owner start it, or use the separately authorized `studio_sdk_service_ensure_running` request with a retained request ID and private workspace recovery permission. Starting the service is separate from exporting; this workflow never starts it automatically or changes its startup configuration.
+
+Save the following plan request as UTF-8 JSON and invoke `run --request` with its absolute path:
+
+```json
+{
+  "workspace": "offline-export-review",
+  "operation": "studio_bound_l5k_plan",
+  "arguments": {
+    "request": {
+      "sourcePath": "C:\\Reviews\\Saved.ACD",
+      "expectedSha256": "<exact saved ACD SHA-256>",
+      "majorRevision": 35
+    }
+  }
+}
+```
+
+Review the plan and obtain explicit offline native authorization. Copy its complete `sdkRequest` object, unchanged, into `arguments.request` in a new request:
+
+```json
+{
+  "workspace": "offline-export-review",
+  "allowNative": true,
+  "operation": "studio_sdk_start_job",
+  "arguments": {
+    "request": {
+      "calls": [
+        { "method": "OpenLogixProjectAsync", "arguments": {} },
+        { "method": "SaveAsAsync", "arguments": { "savePath": "native-readback.l5x", "detailedL5x": true } },
+        { "method": "SaveAsAsync", "arguments": { "savePath": "native-export.l5k" } }
+      ],
+      "sourcePath": "C:\\Reviews\\Saved.ACD",
+      "expectedSha256": "<exact saved ACD SHA-256>",
+      "boundL5kMajorRevision": 35
+    }
+  }
+}
+```
+
+Invoke the native request with an explicit bounded deadline:
+
+```powershell
+& $cli run --request 'C:\Reviews\native-export.json' --timeout-seconds 300
+```
+
+CLI 2.5.1 also defaults native-enabled workspace runs to 300 seconds. The SDK worker receives a 270-second limit with the remaining 30 seconds reserved for cleanup. This is a bounded, owned invocation, not a durable background service. Retain the outer job ID/receipt, SDK job ID, pinned source hash, SDK assembly and output artifacts. Omit controller targets entirely. The paired profile rejects communications paths and controller calls, and requires the native session to remain Offline.
+
+On success, inspect the completed SDK job and use `studio_save_artifact` to export its detailed L5X to a new absolute path. Preserve the ACD input hash and L5X output hash as distinct provenance. For a GM same-snapshot binding, continue with preview/record below and select the native L5X hash.
+
+If a native request times out, retain `recovery.sdkJobReferences`, the outer intent/result, the SDK job record, lifecycle checkpoints and pending markers. A parent deadline can leave the SDK job indeterminate when its owner next opens the workspace. Inspect with `studio_sdk_get_job` and the linked files using native execution disabled. Empty recorded steps or confirmed process cleanup do not prove the SDK never opened the project, saved an output or closed its native session. Do not retry, clear holds, or adopt partial output until the owner has reviewed the exact job and its native close evidence. This workflow provides no automatic retry or automatic reconciliation.
+
 ## Review the exact source and pair
 
 Call `studio_bound_l5k_preview` with `jobId` and `selectedL5xSha256`.

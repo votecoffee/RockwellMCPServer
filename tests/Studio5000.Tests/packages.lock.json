@@ -112,17 +112,24 @@
           "YamlDotNet": "[16.3.0, )"
         }
       },
+      "Rockwell.EngineeringCli": {
+        "type": "Project",
+        "dependencies": {
+          "Studio5000.Core": "[26.1104.14753, )",
+          "Studio5000.Extensions.Rockwell": "[26.1104.14753, )"
+        }
+      },
       "studio5000.client": {
         "type": "Project",
         "dependencies": {
-          "Studio5000.Core": "[1.0.0, )"
+          "Studio5000.Core": "[26.1104.14753, )"
         }
       },
       "studio5000.core": {
         "type": "Project",
         "dependencies": {
           "L5xploderLib": "[1.0.0, )",
-          "Studio5000.Extensibility": "[1.0.0, )"
+          "Studio5000.Extensibility": "[26.1104.14753, )"
         }
       },
       "studio5000.extensibility": {
@@ -131,7 +138,7 @@
       "studio5000.extensions.rockwell": {
         "type": "Project",
         "dependencies": {
-          "Studio5000.Client": "[1.0.0, )"
+          "Studio5000.Client": "[26.1104.14753, )"
         }
       }
     }

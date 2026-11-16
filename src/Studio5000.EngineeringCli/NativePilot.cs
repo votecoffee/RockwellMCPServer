@@ -15,7 +15,7 @@ internal static class NativePilot
         if (File.Exists(Pending))
             return new("native_cleanup_required", "A prior Rockwell native dispatch needs review. Inspect the retained native-pending.json and linked job.");
         return File.Exists(Configuration) ? null :
-            new("native_disabled", "The local native pilot is disabled. This package runs saved L5X reads and SDK catalog discovery.");
+            new("native_disabled", "The legacy native pilot requires a reviewed native-pilot.json. For an installed offline export use the workspace run workflow with explicit allowNative, studio_bound_l5k_plan and studio_sdk_start_job. See docs/BOUND_L5K.md. No native job was started.");
     }
 
     internal static object Run(string job, string requestPath, bool typedReadExport)

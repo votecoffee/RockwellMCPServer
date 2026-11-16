@@ -1,9 +1,9 @@
 # On-demand Rockwell engineering
 
-Rockwell Engineering CLI 2.5.0 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
+Rockwell Engineering CLI 2.5.1 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
 
 ~~~powershell
-$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.5.0'
+$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.5.1'
 .\scripts\Publish-EngineeringMiddleware.ps1 -Destination $deploy
 $cli = Join-Path $deploy 'cli\Rockwell.EngineeringCli.exe'
 $l5x = (Resolve-Path -LiteralPath '.\examples\Demo.L5X').Path
@@ -18,6 +18,10 @@ Choose a new publish destination for each build. Add `-IncludeVendorBridges` to 
 An operation takes an absolute input path or request path. Job stdout is a single JSON object with a version, operation, exit code, result or error, and cleanup status. Stderr carries the diagnostic. The L5X summary includes the input size and SHA-256 of the bytes parsed. Counts describe the supplied document, including partial exports. Admitted jobs keep an intent and result under the user's local application data in RockwellEngineering\jobs.
 
 Independent jobs use distinct working directories and receipts. Help, operations, operation-help and sdk-catalog start no workers. Windows assigns owned children to a private job during suspended creation. The CLI checks process cleanup before returning. A deadline or cancellation may be followed by a brief cleanup interval. File apply uses exclusive publication of a new output. A native hold or interrupted step may require review even when process cleanup is confirmed.
+
+Saved-file commands default to 30 seconds. A workspace `run` with `allowNative: true`, and the legacy native pilot commands, default to 300 seconds. Native-enabled workspace runs accept an explicit deadline of 60..300 seconds and give each SDK worker at most the command deadline minus 30 seconds for cleanup. The outer deadline still covers the entire batch, so several native steps share one bounded invocation. The exact workspace request bytes are pinned before dispatch. The CLI waits for SDK completion; SDK jobs do not survive the owning command as detached background work.
+
+Before waiting, the CLI retains `sdk-<id>.json` with the SDK job record path, source hash and controller-effect classification. It records terminal observation separately. The outer result and receipt include `recovery.sdkJobReferences` even after a deadline or cancellation. These references locate evidence; they do not establish successful export or native close. Never resubmit automatically after an interrupted dispatch.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -62,7 +66,7 @@ To poll, create or bind a stopped watch first. Run `studio_watch_start` in a nat
 
 Native dispatch retains a workspace marker and, for an explicitly configured online target, a communications-path marker. The parent clears its markers after verified worker cleanup and recorded native close. If either receipt is missing, preserve the original state and inspect the linked job and affected target before allowing new native work. Windows process cleanup does not establish controller effects.
 
-For a same-snapshot native L5K and GM `derived_input`, use the [bound L5K workflow](BOUND_L5K.md). Plan, review and record are saved-file operations. Only the reviewed SDK job needs native permission.
+For a bounded offline ACD-to-L5X export, use the [paired native export workflow](BOUND_L5K.md#bounded-offline-acd-to-l5x). It produces detailed L5X plus native L5K from one private snapshot, without requiring a known scalar tag or a legacy pilot configuration. The same workflow supplies a reviewed GM `derived_input` binding. Plan, review and record are saved-file operations. Only the reviewed SDK job needs native permission.
 
 ## Review and publish a saved L5X copy
 
@@ -76,7 +80,7 @@ This workflow changes an existing scalar tag or routine description or rung comm
 
 ## Offline SDK pilot
 
-The earlier dedicated pilot commands remain available. The sdk-catalog command reads the frozen SDK surface and lists methods permitted by the local-project profile. To use these commands, place a reviewed native-pilot.json beside the CLI with an absolute workspaceRoot and the bridgeSha256 for that workspace's artifacts\app\NativeBridge\Studio5000.NativeBridge.exe. Use a dedicated workspace and the existing native-local candidate procedure for SDK dependencies. [Native-local candidate preparation](NATIVE_LOCAL_PILOT.md)
+The earlier dedicated pilot commands remain available. `sdk-read-export-plan` succeeding does not enable `sdk-read-export`: `native_disabled` means the pilot configuration is absent and no native job started. Use the installed workspace export workflow above, or separately prepare the legacy pilot. The sdk-catalog command reads the frozen SDK surface and lists methods permitted by the local-project profile. To use these commands, place a reviewed native-pilot.json beside the CLI with an absolute workspaceRoot and the bridgeSha256 for that workspace's artifacts\app\NativeBridge\Studio5000.NativeBridge.exe. Use a dedicated workspace and the existing native-local candidate procedure for SDK dependencies. [Native-local candidate preparation](NATIVE_LOCAL_PILOT.md)
 
 The typed sdk-read-export command opens a disposable saved ACD snapshot, reads one scalar tag in Offline mode, and returns a detailed L5X artifact through the existing SDK job engine. The operation accepts sourcePath, expectedSha256, tag, dataType, optional program, and optional exportName. Use sdk-read-export-plan with the same request to verify the input fingerprint and inspect the three calls without starting the SDK. A plan does not validate the native ACD format.
 

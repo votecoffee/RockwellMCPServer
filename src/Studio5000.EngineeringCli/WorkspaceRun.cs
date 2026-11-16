@@ -34,10 +34,21 @@ internal static class WorkspaceRun
         batch = new { workspace = "default", allowNative = true, controllerTargetId = "<configured target for online actions>",
             steps = new[] { new { operation = "studio_watch_start", arguments = new { watchId = "<saved watch ID>" }, waitMilliseconds = 5000 } } },
         limits = new { maximumSteps = 24, maximumWaitPerStepMilliseconds = 120000, maximumTotalWaitMilliseconds = 240000, maximumRequestBytes = MaximumRequestBytes },
-        results = "Every completed step has a durable receipt. Large values are available through the receipt path. Steps run in order and stop on an error."
+        deadlines = new { savedFileDefaultSeconds = 30, nativeDefaultSeconds = 300, nativeMinimumSeconds = 60,
+            maximumSeconds = 300, nativeCleanupReserveSeconds = 30, backgroundSdkJobs = false },
+        results = "SDK calls wait for their terminal result within this command. Retain SDK job references on timeout; no automatic retry. Every completed step has a durable receipt. Large values are available through the receipt path. Steps run in order and stop on an error."
     };
 
-    public static async Task<object> ExecuteAsync(string job, string requestPath)
+    internal static bool AllowsNative(byte[] bytes) => ReadJson<Request>(bytes).AllowNative;
+
+    internal static int NativeWorkerTimeout(int commandSeconds)
+    {
+        if (commandSeconds is < 60 or > 300)
+            throw new OperationException("native_deadline_too_short", "A native-enabled run requires --timeout-seconds 60..300 (default 300), including 30 seconds reserved for cleanup. No native job was started.");
+        return commandSeconds - 30;
+    }
+
+    public static async Task<object> ExecuteAsync(string job, string requestPath, int timeoutSeconds)
     {
         var bytes = L5xSummary.ReadBytes(requestPath, MaximumRequestBytes);
         var request = ReadJson<Request>(bytes);
@@ -46,9 +57,10 @@ internal static class WorkspaceRun
         ProjectService.RejectLinks(workspace);
         Directory.CreateDirectory(workspace);
         var options = Options(workspace, request);
+        if (request.AllowNative) options.NativeTimeoutSeconds = NativeWorkerTimeout(timeoutSeconds);
         var input = L5xSummary.Fingerprint(requestPath, bytes);
         EngineeringCli.WriteNew(Path.Combine(job, "invocation.json"), new { input, request.Workspace, request.AllowNative,
-            request.ControllerTargetId, operations = steps.Select(s => s.Operation).ToArray() });
+            request.ControllerTargetId, timeoutSeconds, options.NativeTimeoutSeconds, operations = steps.Select(s => s.Operation).ToArray() });
 
         var receipts = Path.Combine(job, "steps");
         Directory.CreateDirectory(receipts);
@@ -62,7 +74,7 @@ internal static class WorkspaceRun
                 File.Exists(Path.Combine(EngineeringCli.StateRoot, "maintenance-hold.json")) ||
                 File.Exists(Path.Combine(workspace, "maintenance-hold.json")),
                 sdkServiceReceiptDirectory: SdkServiceDirectory, reportWorkspaceBusy: true);
-            using var transport = new LocalOperations.Transport(service, job, request.AllowNative, request.Steps is not null);
+            using var transport = new LocalOperations.Transport(service, job, request.AllowNative, request.Steps is not null, options.StateDirectory);
             if (request.AllowNative) holds = AcquireHolds(workspace, request, options, job);
             try
             {

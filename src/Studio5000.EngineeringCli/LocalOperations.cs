@@ -77,7 +77,7 @@ internal static class LocalOperations
         return routes;
     }
 
-    internal sealed class Transport(ProjectService service, string job, bool native, bool batch) : HttpMessageHandler
+    internal sealed class Transport(ProjectService service, string job, bool native, bool batch, string stateDirectory) : HttpMessageHandler
     {
         private readonly HashSet<string> watches = new(StringComparer.Ordinal);
         public bool NativeOutcomeUncertain { get; private set; }
@@ -123,13 +123,7 @@ internal static class LocalOperations
 
         private async Task<SdkJob> FinishSdkAsync(SdkJob sdk, CancellationToken ct)
         {
-            var receipt = Path.Combine(job, "sdk-" + sdk.Id + ".json");
-            EngineeringCli.WriteNew(receipt, new { sdk.Id, sdk.Status });
-            while (sdk.Status is "queued" or "running")
-            {
-                await Task.Delay(100, ct);
-                sdk = service.SdkJob(sdk.Id);
-            }
+            sdk = await SdkJobWait.FinishAsync(sdk, job, stateDirectory, service.SdkJob, ct);
             if (sdk.Status == "succeeded") return sdk;
             NativeOutcomeUncertain = true;
             throw new OperationException("native_job_review_required", $"SDK job {sdk.Id} reported {sdk.Status}. Inspect its durable workspace receipt before another native dispatch.");
