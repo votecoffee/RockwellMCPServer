@@ -1,9 +1,9 @@
 # On-demand Rockwell engineering
 
-Rockwell Engineering CLI 2.8.2 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
+Rockwell Engineering CLI 2.8.3 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
 
 ~~~powershell
-$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.8.2'
+$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.8.3'
 .\scripts\Publish-EngineeringMiddleware.ps1 -Destination $deploy
 $cli = Join-Path $deploy 'cli\Rockwell.EngineeringCli.exe'
 $l5x = (Resolve-Path -LiteralPath '.\examples\Demo.L5X').Path

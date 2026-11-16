@@ -1,5 +1,7 @@
 # PLC tag where-used
 
+CLI 2.8.3 additionally recognizes the exact case-insensitive native suffixes `Robot:I1`, `Robot:O1`, `Robot:SI` and `Robot:SO` as whole roots, including their member/array selectors. Dynamic subscripts remain separate references. Other numbered or extended suffixes are not inferred. Removing these syntax diagnostics does not establish device, safety, member/type or compiler binding coverage.
+
 Case-insensitive native status keywords (`S:FS`, `S:N`, `S:Z`, `S:V`, `S:C`, `S:MINOR`) and module roots (`Device:I`, `Device:O`, `Device:C`, `Local:1:I`) are recognized as complete lexical operands. They do not become references to plain user tags named `S`, `FS`, `Device`, `Local` or member `Data`. Dynamic native I/O subscripts still expose separate index-expression references. Simple user-tag query selectors remain unchanged. Unknown qualifiers and malformed native selectors retain diagnostics. This is syntax coverage, not status evaluation or module/member binding. [Status keyword documentation](https://www.rockwellautomation.com/en-ua/docs/studio-5000-logix-designer/37-00/contents-ditamap/math-status-flags.html)
 
 The shared service finds **lexical candidates** for an exact saved controller/program base tag in program RLL and Structured Text source, plus direct `AliasFor` declarations. It preserves occurrences, source selectors, UTF-16 character offsets, rung/line numbers and bounded source snippets. It never connects to a controller or modifies a source/revision.

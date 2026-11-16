@@ -13,6 +13,7 @@ public sealed class TagReferenceTests : IDisposable
     [Theory]
     [InlineData("S:FS")][InlineData("s:fs")][InlineData("S:N")][InlineData("S:Z")][InlineData("S:V")][InlineData("S:C")][InlineData("s:minor")]
     [InlineData("Device:I.Data[0]")][InlineData("Device:O.Data[1]")][InlineData("Device:C.Config")][InlineData("Local:1:I.Data[0]")][InlineData("Remote:12:O.Data.3")]
+    [InlineData("Robot:I1.Data[0]")][InlineData("Robot:O1.Data[0]")][InlineData("Robot:SI.Data[0]")][InlineData("robot:so.Data[0]")]
     public void Native_colon_operands_are_whole_lexical_roots_without_coverage_diagnostics(string operand)
     {
         var issues = new List<string>(); var tokens = TagReferences.Lex("XIC(" + operand + ");", issues.Add).ToArray();
@@ -21,16 +22,18 @@ public sealed class TagReferenceTests : IDisposable
     }
     [Theory]
     [InlineData("Unknown:Private.Data")][InlineData("S:FSExtra")][InlineData("S:FS.Data")][InlineData("Device:Q.Data")][InlineData("Local:1:Q.Data")][InlineData("Device:I:Unknown")][InlineData("S:")][InlineData("Device:")]
+    [InlineData("Robot:I12.Data")][InlineData("Robot:SIExtra.Data")][InlineData("Robot:O1:Extra")][InlineData("Robot:SO.")]
     public void Unknown_or_malformed_qualifiers_still_report_unresolved_source(string operand)
     { var issues = new List<string>(); _ = TagReferences.Lex("XIC(" + operand + ");", issues.Add).ToArray(); Assert.Contains("unsupported_qualified_address",issues); }
     [Fact]
     public void Dynamic_native_IO_indexes_retain_separate_user_dependencies_and_exact_spans()
     {
-        const string text="CPS(Device:I.Data[Index+1],InputData,1)MOV(Local:2:O.Data[Items[Index]],Value);";
+        const string text="CPS(Device:I.Data[Index+1],InputData,1)MOV(Local:2:O.Data[Items[Index]],Value)CPS(Robot:I1.Data[Index],InputData,1)CPS(Value,Robot:SO.Data[Items[Index]],1);";
         var issues=new List<string>(); var tokens=TagReferences.Lex(text,issues.Add).ToArray(); Assert.Empty(issues);
         Assert.Contains(tokens,t=>t.Name=="Device:I"&&t.Status=="dynamic_address_candidate"); Assert.Contains(tokens,t=>t.Name=="Local:2:O");
-        Assert.Equal(2,tokens.Count(t=>t.Name=="Index"&&t.Role=="index_expression")); Assert.Contains(tokens,t=>t.Name=="Items"&&t.Role=="index_expression");
-        Assert.DoesNotContain(tokens,t=>t.Name is "Device" or "Local" or "Data");
+        Assert.Equal(4,tokens.Count(t=>t.Name=="Index"&&t.Role=="index_expression")); Assert.Contains(tokens,t=>t.Name=="Items"&&t.Role=="index_expression");
+        Assert.Contains(tokens,t=>t.Name=="Robot:I1"&&t.Status=="dynamic_address_candidate"); Assert.Contains(tokens,t=>t.Name=="Robot:SO"&&t.Status=="dynamic_address_candidate");
+        Assert.DoesNotContain(tokens,t=>t.Name is "Device" or "Local" or "Robot" or "Data");
         Assert.All(tokens,t=>Assert.False(string.IsNullOrWhiteSpace(text.Substring(t.Start,t.Length))));
     }
     private readonly string root = Path.Combine(Path.GetTempPath(), "RockwellTagReferences", Guid.NewGuid().ToString("N"));

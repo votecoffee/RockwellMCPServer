@@ -21,7 +21,7 @@ public sealed class UnusedCleanupTests : IDisposable
         text=text.Replace("</DataTypes>",types+"</DataTypes><AddOnInstructionDefinitions>"+aoi+hidden+"</AddOnInstructionDefinitions>",StringComparison.Ordinal);
         text=text.Replace("</Tags><Programs>",string.Concat(new[]{Tag("Tmr","TIMER"),Tag("Pause","BOOL"),Tag("State","DINT"),Tag("CommOK","BOOL"),Tag("InputData","DINT")}.Select(t=>t.ToString(SaveOptions.DisableFormatting)))+"</Tags><Programs>",StringComparison.Ordinal);
         var marker=text.IndexOf("XIC(Requested)OTE(Enabled);",StringComparison.Ordinal);
-        const string code="XIC(S:FS)MOV(1000,Tmr.PRE)OTL(Pause)CLR(State); [XIC(CommOK)CPS(Device:I.Data[0],InputData,1),XIO(CommOK)FLL(0,InputData,1)];";
+        const string code="XIC(S:FS)MOV(1000,Tmr.PRE)OTL(Pause)CLR(State); [XIC(CommOK)CPS(Device:I.Data[0],InputData,1),XIO(CommOK)FLL(0,InputData,1)]; CPS(Robot:I1.Data[0],I.Buffer[0],25)CPS(O.Buffer[0],Robot:O1.Data[0],25)CPS(Robot:SI.Data[0],SafeIn,1)CPS(SafeOut,Robot:SO.Data[0],1);";
         text=text[..marker]+code+text[(marker+"XIC(Requested)OTE(Enabled);".Length)..]; File.WriteAllText(path,text,new UTF8Encoding(false));
         var original=File.ReadAllBytes(path); var p=await service.RegisterAsync(path);
         var candidates=new[]{new UnusedCleanupSelection("udt","State"),new("aoi","Pause")}.Concat(Enumerable.Range(0,127).Select(i=>new UnusedCleanupSelection("udt","Spare"+i))).ToArray();

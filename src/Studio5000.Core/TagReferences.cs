@@ -21,6 +21,7 @@ public static class TagReferences
     private static bool Initial(char c) => char.IsAsciiLetter(c) || c == '_';
     private static bool Same(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     private static readonly HashSet<string> StatusFlags = new(["FS", "N", "Z", "V", "C", "MINOR"], StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> NativeIoSuffixes = new(["I", "O", "C", "I1", "O1", "SI", "SO"], StringComparer.OrdinalIgnoreCase);
 
     // Native status keywords are not user tags. Keep native I/O roots whole so
     // Device:I.Data never becomes a reference to a user declaration named Device.
@@ -38,7 +39,7 @@ public static class TagReferences
         var qualifier = new string(source, start, cursor - start); nameEnd = cursor;
         if (!slot && Same(root, "S") && StatusFlags.Contains(qualifier))
             return cursor == end || source[cursor] is not ('.' or '[' or ':' or '(');
-        if (qualifier.Length != 1 || char.ToUpperInvariant(qualifier[0]) is not ('I' or 'O' or 'C')) return false;
+        if (!NativeIoSuffixes.Contains(qualifier)) return false;
         return cursor == end || source[cursor] is not (':' or '(') &&
             (source[cursor] != '.' || cursor + 1 < end && Word(source[cursor + 1]));
     }
