@@ -5,6 +5,8 @@ description: Use the standalone Windows Rockwell CLI for Logix L5X/ACD, FactoryT
 
 # Rockwell engineering CLI
 
+For read-only packed/native safety-I/O comparison, discover studio_safety_io_static_profiles or inspect pinned files with studio_safety_io_static_profile_inspect. Supports exact 1734-IB8S/B major2, 1732ES-IB16/A major1 and 1732ES-IB8XOBV4/A major1; the last uses shared AB:1732ES_IB8XOB8:C:0. Use studio_safety_io_static_browse with source revision/hash, module, profileId/files, expectedProfileSha256 and explicit encoding flat-bytes or packed-dint32-le (23/42/27 DWORDs respectively). ConfigSize/leading words and SCID remain retained but unvalidated; never rewrite them to fit an assumed size. Compare explicit before/after browse requests with studio_safety_io_static_compare, identical profile hashes and paged offset/limit. parametersEqual covers channels only; inspect hasUnknownParameterValues, nonParameterDifferences, moduleContextEqual, nativeConfigSizeEqual and terminalPaddingEqual. Retain/export its immutable receipt. No auto-alignment, packed/1732 editing, signature generation, native approval, SDK job or live access is added.
+
 Discover the installed command and argument schema before composing a request. Use the Windows executable directly.
 
 ~~~powershell

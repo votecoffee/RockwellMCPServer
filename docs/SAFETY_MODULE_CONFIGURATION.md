@@ -1,5 +1,7 @@
 # Safety module configuration and SCID
 
+For saved-file parameter inspection/comparison of packed 1734-IB8S/B and 1732ES-IB16/A / IB8XOBV4/A, use the separate [static safety-I/O workflow](SAFETY_IO_STATIC.md). It adds no editing or native signature acceptance.
+
 RockwellMCPServer provides a reviewed saved-file point-configuration workflow for **1734-IB8S series B / major 2**, using pinned installed AOP identity/layout/enums. It does **not** provide native AOP execution or module-SCID regeneration. A decoded configuration-byte edit is an **unvalidated review candidate**. Retaining the previous configuration signature does not establish that the changed payload is native-valid.
 
 ## Current support

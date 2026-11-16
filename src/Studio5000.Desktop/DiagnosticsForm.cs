@@ -12,6 +12,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
     private sealed record WatchChoice(WatchStatus Status) { public override string ToString() => Status.Definition.Settings.Name + " • r" + Status.Definition.Revision + " • " + Status.State; }
     private static ActionItem A(string name, string title) => new("studio_" + name, title);
     private static readonly Workflow[] Workflows = [
+        new("Safety I/O static comparison", "Read/compare exact saved module pairs using pinned installed AOP layouts for 1734-IB8S/B and 1732ES-IB16/A / IB8XOBV4/A. Select flat-bytes or packed-dint32-le explicitly. Channel parameters are compared separately from retained native envelope/signature/reserved/padding and network context. The IB8XOBV4 profile uses the AOP's shared IB8XOB8 configuration layout. No writes, auto-alignment, AOP execution, controller access or safety acceptance.",
+            [A("safety_io_static_profiles", "Discover static profile layouts"), A("safety_io_static_profile_inspect", "Inspect pinned static profile files"), A("safety_io_static_browse", "Decode saved native parameters"), A("safety_io_static_compare", "Compare paired modules and retain receipt")]),
         new("AOI dependencies and fresh preservation", "Pin the reviewed reference and original fresh export. Plan explicit new standard readable RLL AOI/UDT identities, then combine the returned reference additions and edits with a separately reviewed structural scope. Existing tags, configuration and libraries stay fresh. Plan exact device address operands when needed, and compose completed structural receipts back to the original fresh export. Safety overlays remain separately authorized review-only work. No native execution.",
             [A("aoi_dependency_plan", "Plan source-pinned AOI dependencies"), A("aoi_address_plan", "Plan fresh device address operands"), A("structural_edit_preview", "Review the explicit structural batch"), A("structural_edit_apply", "Publish the reviewed candidate"), A("preservation_chain_review", "Compose original-fresh preservation receipt")]),
         new("Logic tracing", "Select the modified/project snapshot, a tag and optional program. Trace readers/writers and dependencies across routines, aliases and AOI parameters. Review diagnostics for unknown effects, addressing and protected source.",
@@ -126,8 +128,14 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var safetyProfile = new SafetyIoProfileFiles(new("", ""), new("", ""));
         var safetySource = new SafetyIoBrowseRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, "", safetyProfile, "");
         var safetyEdit = new SafetyIoEditRequest(safetySource, "", [], []);
+        var staticProfile = new SafetyIoStaticProfileRequest("1734-IB8S/B", safetyProfile);
+        var staticBefore = new SafetyIoStaticBrowseRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, "", staticProfile, "", "packed-dint32-le");
+        var staticAfter = new SafetyIoStaticBrowseRequest(f?.Id ?? "", f?.CurrentSha256 ?? "", f?.Revision ?? 0, "", staticProfile, "", "packed-dint32-le");
         object? request = operation switch
         {
+            "studio_safety_io_static_profile_inspect" => staticProfile,
+            "studio_safety_io_static_browse" => staticBefore,
+            "studio_safety_io_static_compare" => new SafetyIoStaticCompareRequest(staticBefore, staticAfter),
             "studio_aoi_dependency_plan" => new AoiDependencyPlanRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), new(f?.Id ?? "", f?.CurrentSha256 ?? ""), [], [], []),
             "studio_aoi_address_plan" => new AoiAddressPlanRequest(new(f?.Id ?? "", f?.CurrentSha256 ?? ""), new(p?.Id ?? "", p?.CurrentSha256 ?? ""), []),
             "studio_preservation_chain_review" => new PreservationChainRequest(new(f?.Id ?? "", f?.CurrentSha256 ?? ""), new(selectedCandidate?.Id ?? "", selectedCandidate?.CurrentSha256 ?? ""), []),

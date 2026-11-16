@@ -79,6 +79,10 @@ public static class EngineeringOperations
         add("POST", "/api/aoi-dependencies/plan", (ProjectService service, AoiDependencyPlanRequest request, CancellationToken ct) => service.PlanAoiDependenciesAsync(request, ct));
         add("POST", "/api/aoi-addresses/plan", (ProjectService service, AoiAddressPlanRequest request, CancellationToken ct) => service.PlanAoiAddressesAsync(request, ct));
         add("POST", "/api/preservation-chains/review", (ProjectService service, PreservationChainRequest request, CancellationToken ct) => service.ReviewPreservationChainAsync(request, ct));
+        add("GET", "/api/safety-io/static/profiles", (ProjectService service) => service.SafetyIoStaticInstalledProfiles());
+        add("POST", "/api/safety-io/static/profiles/inspect", (ProjectService service, SafetyIoStaticProfileRequest request) => service.InspectSafetyIoStaticProfile(request));
+        add("POST", "/api/safety-io/static/browse", (ProjectService service, SafetyIoStaticBrowseRequest request, CancellationToken ct) => service.BrowseSafetyIoStaticAsync(request, ct));
+        add("POST", "/api/safety-io/static/compare", (ProjectService service, SafetyIoStaticCompareRequest request, CancellationToken ct) => service.CompareSafetyIoStaticAsync(request, ct));
         add("POST", "/api/unused-cleanup/preview", (ProjectService service, UnusedCleanupRequest request, CancellationToken ct) => service.PreviewUnusedCleanupAsync(request, ct));
         add("POST", "/api/unused-cleanup/apply", (ProjectService service, UnusedCleanupApplyRequest request, CancellationToken ct) => service.ApplyUnusedCleanupAsync(request, ct));
         add("GET", "/api/unused-cleanup/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.UnusedCleanupStatusAsync(id, expectedSha256, ct));
