@@ -93,7 +93,8 @@ public sealed partial class ProjectService
                 var index = aoi ? aois : types; var existing = aoi ? existingAois : existingTypes; var other = aoi ? existingTypes : existingAois;
                 if (!index.TryGetValue(name, out var node)) { Block(name, "Concrete source definition is missing."); visiting.Remove(key); return; }
                 if (other.ContainsKey(name)) Block(name, "Destination AOI/UDT namespace collision.");
-                if (node.Name != (aoi ? "AddOnInstructionDefinition" : "DataType") || LogixPreservation.Safety(node) || node.DescendantsAndSelf().Any(e => e.Name.LocalName.Contains("Encoded", StringComparison.OrdinalIgnoreCase) || e.Name.LocalName.Contains("Signature", StringComparison.OrdinalIgnoreCase) || e.Attributes().Any(a => a.Name.LocalName.Contains("Signature", StringComparison.OrdinalIgnoreCase) || a.Name.LocalName.Contains("Protected", StringComparison.OrdinalIgnoreCase))))
+                static bool OpaqueOrSigned(string name) => new[] { "Encoded", "Encrypted", "Encryption", "Signature", "Protected" }.Any(marker => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
+                if (node.Name != (aoi ? "AddOnInstructionDefinition" : "DataType") || LogixPreservation.Safety(node) || node.DescendantsAndSelf().Any(e => OpaqueOrSigned(e.Name.LocalName) || e.Attributes().Any(a => OpaqueOrSigned(a.Name.LocalName))))
                     Block(name, "Only standard readable unsigned definitions can participate; protected/safety dependencies require a separate review.");
                 string[] typeNames = [], calls = [];
                 try

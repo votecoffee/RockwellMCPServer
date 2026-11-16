@@ -64,12 +64,13 @@ public sealed class AoiDependencyWorkflowTests : IDisposable
     }
 
     [Theory]
-    [InlineData("unapproved")][InlineData("incompatible")][InlineData("collision")][InlineData("safety")][InlineData("encoded")][InlineData("unknown-call")][InlineData("cycle")][InlineData("st")]
+    [InlineData("unapproved")][InlineData("incompatible")][InlineData("collision")][InlineData("safety")][InlineData("encoded")][InlineData("encryption")][InlineData("unknown-call")][InlineData("cycle")][InlineData("st")]
     public async Task Missing_approval_incompatible_or_unsupported_dependencies_are_blocked(string kind)
     {
         var sourceXml = Xml(true);
         if (kind == "safety") sourceXml = sourceXml.Replace("Name='Link' Class='Standard'", "Name='Link' Class='Safety'");
         if (kind == "encoded") sourceXml = sourceXml.Replace("Name='Link' Class='Standard'", "Name='Link' Class='Standard' SignatureID='trusted'");
+        if (kind == "encryption") sourceXml = sourceXml.Replace("Name='Link' Class='Standard'", "Name='Link' Class='Standard' IsEncrypted='true'");
         if (kind == "unknown-call") sourceXml = sourceXml.Replace("Helper(H)Nested(N);", "MissingAoi(H);");
         if (kind == "cycle") sourceXml = sourceXml.Replace("MOV(0,State.Record.Value);", "Link(Recursive);");
         if (kind == "st") sourceXml = sourceXml.Replace("Type='RLL'", "Type='ST'").Replace("<RLLContent><Rung Number='0' Type='N'><Text><![CDATA[", "<STContent><Line Number='0'><![CDATA[").Replace("]]></Text></Rung></RLLContent>", "]]></Line></STContent>");
