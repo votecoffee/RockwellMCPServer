@@ -56,6 +56,7 @@ RockwellMCPServer gives agents and engineers a shared workspace for project insp
 
 | Capability | Scope |
 |---|---|
+| Reviewed unused cleanup | Review explicit tag/UDT/AOI candidates with source-bound dependency closure, native status/I/O operand recognition, separate lexical/opaque coverage, and byte-preserving retained receipts. [Workflow](docs/UNUSED_CLEANUP.md) |
 | Logix project editing | Inspect and preview/apply L5X component changes; export L5X or exploded ZIP. Optional SDK conversion supports ACD files. |
 | Project review | Compare full hash-bound Logix exports or an exact program/routine, trace saved PLC symbols through routines and aliases, and browse ladder differences and drawings. |
 | Logix SDK jobs | Ordered native calls for projects, builds, imports, typed/raw tags and other operations in the bound SDK version. MCP history uses summary pages with a small initial buffer and a bounded response budget; exact per-job diagnostics remain separate. Availability depends on the installed Logix version and project. |

@@ -14,7 +14,7 @@ public sealed partial class ProjectService
         using (await EnterWorkspaceAsync(request.ProjectId, ct))
         {
             var preview = BuildUnusedCleanup(request, ct).Preview;
-            var receipt = StructuralArtifact(request.ProjectId, "json", JsonSerializer.SerializeToUtf8Bytes(new UnusedCleanupReceipt("unused_cleanup_preview", 1, preview), Json));
+            var receipt = StructuralArtifact(request.ProjectId, "json", JsonSerializer.SerializeToUtf8Bytes(new UnusedCleanupReceipt("unused_cleanup_preview", 1, preview, WorkspaceIdentity.Name, WorkspaceIdentity.Version), Json));
             Audit("unused_cleanup_preview", Get(request.ProjectId), preview.Source.Sha256, preview.ResultSha256, receipt.Id);
             return preview with { PreviewReceipt = receipt };
         }

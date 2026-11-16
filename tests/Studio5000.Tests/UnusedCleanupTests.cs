@@ -10,6 +10,48 @@ namespace Studio5000.Tests;
 
 public sealed class UnusedCleanupTests : IDisposable
 {
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task Full_readable_native_operands_allow_unused_types_and_AOIs_while_true_opaque_siblings_stay_conservative(bool opaque)
+    {
+        var path=Path.Combine(root,"native-operands-full.L5X"); FullControllerReviewTests.WriteController(path,false);
+        var text=File.ReadAllText(path).Replace("<RSLogix5000Content ","<RSLogix5000Content TargetType=\"Controller\" ContainsContext=\"false\" ",StringComparison.Ordinal);
+        var types=string.Concat(new[]{"State"}.Concat(Enumerable.Range(0,127).Select(i=>"Spare"+i)).Select(n=>"<DataType Name='"+n+"'><Members><Member Name='Value' DataType='DINT'/></Members></DataType>"));
+        const string aoi="<AddOnInstructionDefinition Name='Pause' Class='Standard'><Parameters/><LocalTags/><Routines><Routine Name='Logic' Type='RLL'><RLLContent><Rung Number='0'><Text><![CDATA[XIC(s:fs)NOP();]]></Text></Rung></RLLContent></Routine></Routines></AddOnInstructionDefinition>";
+        var hidden=opaque?string.Concat(Enumerable.Range(0,3).Select(i=>"<EncodedData Name='Hidden"+i+"' EncodedType='AddOnInstructionDefinition'><Parameters/></EncodedData>")):"";
+        text=text.Replace("</DataTypes>",types+"</DataTypes><AddOnInstructionDefinitions>"+aoi+hidden+"</AddOnInstructionDefinitions>",StringComparison.Ordinal);
+        text=text.Replace("</Tags><Programs>",string.Concat(new[]{Tag("Tmr","TIMER"),Tag("Pause","BOOL"),Tag("State","DINT"),Tag("CommOK","BOOL"),Tag("InputData","DINT")}.Select(t=>t.ToString(SaveOptions.DisableFormatting)))+"</Tags><Programs>",StringComparison.Ordinal);
+        var marker=text.IndexOf("XIC(Requested)OTE(Enabled);",StringComparison.Ordinal);
+        const string code="XIC(S:FS)MOV(1000,Tmr.PRE)OTL(Pause)CLR(State); [XIC(CommOK)CPS(Device:I.Data[0],InputData,1),XIO(CommOK)FLL(0,InputData,1)];";
+        text=text[..marker]+code+text[(marker+"XIC(Requested)OTE(Enabled);".Length)..]; File.WriteAllText(path,text,new UTF8Encoding(false));
+        var original=File.ReadAllBytes(path); var p=await service.RegisterAsync(path);
+        var candidates=new[]{new UnusedCleanupSelection("udt","State"),new("aoi","Pause")}.Concat(Enumerable.Range(0,127).Select(i=>new UnusedCleanupSelection("udt","Spare"+i))).ToArray();
+        var preview=await service.PreviewUnusedCleanupAsync(Request(p,candidates)); var coverage=Assert.IsType<UnusedCleanupCoverage>(preview.Coverage);
+        Assert.True(coverage.ReadableUnits>=14500); Assert.Equal(0,coverage.LexicalUnresolvedUnits); Assert.True(coverage.ReadableLexicalCoverageComplete);
+        Assert.Equal(opaque?3:0,coverage.ProtectedAoiRoots); Assert.Equal(opaque,coverage.HiddenOrUnsupportedSourcePresent); Assert.Equal(opaque,preview.Partial);
+        Assert.DoesNotContain(preview.Diagnostics,d=>d.StartsWith("lexical-source-unresolved:",StringComparison.Ordinal));
+        if(opaque)
+        { Assert.False(preview.CanApply); Assert.Empty(preview.Removals); Assert.Equal(129,preview.Retentions.Length); Assert.Contains(preview.Dependencies,e=>e.Kind=="protected-aoi-hidden-dependencies"); }
+        else
+        {
+            Assert.True(preview.CanApply); Assert.Equal(129,preview.Removals.Length); Assert.Empty(preview.Retentions);
+            var applied=await service.ApplyUnusedCleanupAsync(Apply(preview));
+            var expected=text.Replace(types,"",StringComparison.Ordinal).Replace(aoi,"",StringComparison.Ordinal);
+            Assert.Equal(Encoding.UTF8.GetBytes(expected),File.ReadAllBytes(service.Download(applied.Candidate.Id).Path));
+            using var receipt=JsonDocument.Parse(File.ReadAllBytes(service.Download(preview.PreviewReceipt!.Id).Path));
+            Assert.Equal(WorkspaceIdentity.Name,receipt.RootElement.GetProperty("producer").GetString()); Assert.Equal(WorkspaceIdentity.Version,receipt.RootElement.GetProperty("toolVersion").GetString());
+        }
+        Assert.Equal(original,File.ReadAllBytes(path)); Assert.Empty(service.SdkJobList());
+    }
+    [Fact]
+    public async Task Lexically_unresolved_mentions_are_not_reported_as_protected_private_dependencies()
+    {
+        var doc=Fixture(); doc.Root!.Element("Controller")!.Element("DataTypes")!.Add(new XElement("DataType",new XAttribute("Name","UnresolvedType"),new XElement("Members",new XElement("Member",new XAttribute("Name","Value"),new XAttribute("DataType","DINT")))));
+        doc.Descendants("Program").First().Descendants("Text").First().Value="MOV(Unknown:UnresolvedType,Kept);";
+        var p=await Register(doc); var report=await service.PreviewUnusedCleanupAsync(Request(p,[new("udt","UnresolvedType")]));
+        Assert.True(report.Partial); var coverage=Assert.IsType<UnusedCleanupCoverage>(report.Coverage); Assert.Equal(1,coverage.LexicalUnresolvedUnits); Assert.Equal(0,coverage.ProtectedAoiRoots); Assert.Equal(0,coverage.OtherOpaqueRoots); Assert.False(coverage.HiddenOrUnsupportedSourcePresent);
+        Assert.Contains(report.Diagnostics,d=>d.Contains("unsupported_qualified_address",StringComparison.Ordinal)); Assert.DoesNotContain(report.Diagnostics,d=>d.StartsWith("protected-aoi-hidden-dependencies:",StringComparison.Ordinal));
+        Assert.Equal("unresolved-source-mention",Assert.Single(report.Retentions).Reason); Assert.Empty(report.Removals);
+    }
     private readonly string root = Path.Combine(Path.GetTempPath(), "RockwellCleanup", Guid.NewGuid().ToString("N"));
     private readonly ProjectService service;
     public UnusedCleanupTests()

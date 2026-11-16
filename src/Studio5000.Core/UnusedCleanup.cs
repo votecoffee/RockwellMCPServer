@@ -14,17 +14,21 @@ public sealed record UnusedCleanupDeclaration(string Key, UnusedCleanupSelection
 public sealed record UnusedCleanupRetention(UnusedCleanupDeclaration Declaration, string Reason, string SourceXPath, string? RequiredBy = null);
 public sealed record UnusedCleanupDependency(string From, string To, string Kind, string SourceXPath);
 public sealed record UnusedCleanupPreservation(int RetainedDeclarations, string RetainedDeclarationSetSha256, bool UnselectedBytesPreserved);
+public sealed record UnusedCleanupCoverage(int ReadableUnits, int LexicalUnresolvedUnits, int ProtectedAoiRoots,
+    int OtherOpaqueRoots, int UnsupportedOrMissingUnits, bool ReadableLexicalCoverageComplete, bool HiddenOrUnsupportedSourcePresent);
 public sealed record UnusedCleanupPreview(UnusedCleanupRequest Request, ComparisonSnapshot Source, bool CanApply,
     string? ResultSha256, string ReviewSha256, UnusedCleanupDeclaration[] Removals, UnusedCleanupRetention[] Retentions,
     UnusedCleanupDependency[] Dependencies, string[] Diagnostics, bool Partial, UnusedCleanupPreservation Preservation,
-    string Boundary, Artifact? PreviewReceipt = null);
+    string Boundary, Artifact? PreviewReceipt = null, UnusedCleanupCoverage? Coverage = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UnusedCleanupApplyRequest(UnusedCleanupRequest Preview, string ExpectedReviewSha256,
     string PreviewReceiptId, string PreviewReceiptSha256);
 public sealed record UnusedCleanupResult(ProjectInfo Project, Artifact Candidate, Artifact Receipt, string ReviewSha256,
     bool ReviewOnly = true, string NativeAcceptance = "not-performed");
 public sealed record UnusedCleanupStatus(Artifact PreviewReceipt, UnusedCleanupPreview Preview, string Status, UnusedCleanupResult? Result);
-internal sealed record UnusedCleanupReceipt(string Kind, int SchemaVersion, UnusedCleanupPreview Preview);
+internal sealed record UnusedCleanupReceipt(string Kind, int SchemaVersion, UnusedCleanupPreview Preview,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Producer = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ToolVersion = null);
 internal sealed record UnusedCleanupApplyState(string Status, string ReviewSha256, UnusedCleanupResult? Result);
 
 internal static class UnusedCleanup
@@ -79,6 +83,7 @@ internal static class UnusedCleanup
         var edges = new Dictionary<(string From, string To), UnusedCleanupDependency>();
         var retained = new Dictionary<string, UnusedCleanupRetention>(StringComparer.OrdinalIgnoreCase);
         var diagnostics = new List<string>(); var partial = false; long characters = 0;
+        var readableUnits = 0; var lexicalUnresolvedUnits = 0; var protectedAoiRoots = 0; var otherOpaqueRoots = 0; var unsupportedUnits = 0;
         string Owner(XElement element) => element.AncestorsAndSelf().Select(e => identities.GetValueOrDefault(e)).FirstOrDefault(k => k is not null) is { } key && nodes.ContainsKey(key) ? key : Root;
         void Edge(string owner, string target, string kind, Func<string> location)
         {
@@ -92,6 +97,9 @@ internal static class UnusedCleanup
         void Unknown(string owner, string location, string reason)
         {
             partial = true;
+            if (reason == "protected-aoi-hidden-dependencies") protectedAoiRoots++;
+            else if (reason == "opaque-source") otherOpaqueRoots++;
+            else unsupportedUnits++;
             if (diagnostics.Count < 50) diagnostics.Add(reason + ": " + location);
             foreach (var key in nodes.Keys) Edge(owner, key, reason, () => location);
         }
@@ -132,21 +140,21 @@ internal static class UnusedCleanup
         {
             ct.ThrowIfCancellationRequested();
             if (text.Length > 1024 * 1024 || (characters += text.Length) > 16 * 1024 * 1024) throw new OperationException("unused_cleanup_limit", "Reference scanning supports 1 MiB per unit/routine and 16 MiB total source text.");
-            var issues = false;
-            foreach (var token in TagReferences.Lex(text, _ => issues = true))
+            readableUnits++; var issues = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var token in TagReferences.Lex(text, message => issues.Add(message)))
             {
                 if (token.Program is null && aoiLocals?.Contains(token.Name) == true) continue;
                 var binding = token.Program ?? (program is not null && programs[program].Contains(token.Name) ? program : null);
                 var key = Key(new("tag", token.Name, binding));
                 if (tagKeys.Contains(key)) Edge(owner, key, "lexical-tag-or-alias", () => XmlProjects.PathOf(location));
             }
-            var masked = new string(TagReferences.MaskSource(text, _ => issues = true));
+            var masked = new string(TagReferences.MaskSource(text, message => issues.Add(message)));
             foreach (Match call in Regex.Matches(masked, @"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2)))
                 if (selectedAois.TryGetValue(call.Groups[1].Value, out var key)) Edge(owner, key, "aoi-call", () => XmlProjects.PathOf(location));
-            if (issues)
+            if (issues.Count > 0)
             {
-                partial = true;
-                if (diagnostics.Count < 50) diagnostics.Add("lexical-source-unresolved: " + XmlProjects.PathOf(location));
+                partial = true; lexicalUnresolvedUnits++;
+                if (diagnostics.Count < 50) diagnostics.Add("lexical-source-unresolved: " + XmlProjects.PathOf(location) + " [" + string.Join(",", issues.Order(StringComparer.Ordinal)) + "]");
                 Mentions(text, owner, () => XmlProjects.PathOf(location), "unresolved-source-mention");
             }
         }
@@ -210,7 +218,8 @@ internal static class UnusedCleanup
             throw new OperationException("unused_cleanup_preservation", "Removal readback differs from the exact retained declaration/value fingerprints.");
         var report = new UnusedCleanupPreview(request, new(project.Id, project.Name, project.Revision, project.CurrentSha256), removals.Length > 0,
             removals.Length > 0 ? ProjectService.Hash(result) : null, "", removals, retained.Values.ToArray(), edges.Values.ToArray(), diagnostics.ToArray(), partial,
-            new(remaining.Count, before, true), Boundary);
+            new(remaining.Count, before, true), Boundary, Coverage: new(readableUnits, lexicalUnresolvedUnits, protectedAoiRoots, otherOpaqueRoots, unsupportedUnits,
+                lexicalUnresolvedUnits == 0, protectedAoiRoots + otherOpaqueRoots + unsupportedUnits > 0));
         var hash = ProjectService.Hash(JsonSerializer.SerializeToUtf8Bytes(report, ProjectService.Json));
         report = report with { ReviewSha256 = hash };
         if (JsonSerializer.SerializeToUtf8Bytes(report, ProjectService.Json).Length > 4 * 1024 * 1024) throw new OperationException("unused_cleanup_limit", "Review exceeds 4 MiB; narrow the candidate set.");

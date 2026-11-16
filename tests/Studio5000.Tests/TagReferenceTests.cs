@@ -10,6 +10,29 @@ namespace Studio5000.Tests;
 
 public sealed class TagReferenceTests : IDisposable
 {
+    [Theory]
+    [InlineData("S:FS")][InlineData("s:fs")][InlineData("S:N")][InlineData("S:Z")][InlineData("S:V")][InlineData("S:C")][InlineData("s:minor")]
+    [InlineData("Device:I.Data[0]")][InlineData("Device:O.Data[1]")][InlineData("Device:C.Config")][InlineData("Local:1:I.Data[0]")][InlineData("Remote:12:O.Data.3")]
+    public void Native_colon_operands_are_whole_lexical_roots_without_coverage_diagnostics(string operand)
+    {
+        var issues = new List<string>(); var tokens = TagReferences.Lex("XIC(" + operand + ");", issues.Add).ToArray();
+        Assert.Empty(issues); var token = Assert.Single(tokens); Assert.Equal(operand, ("XIC(" + operand + ");").Substring(token.Start, token.Length));
+        Assert.Contains(':', token.Name); Assert.Equal("candidate", token.Status);
+    }
+    [Theory]
+    [InlineData("Unknown:Private.Data")][InlineData("S:FSExtra")][InlineData("S:FS.Data")][InlineData("Device:Q.Data")][InlineData("Local:1:Q.Data")][InlineData("Device:I:Unknown")][InlineData("S:")][InlineData("Device:")]
+    public void Unknown_or_malformed_qualifiers_still_report_unresolved_source(string operand)
+    { var issues = new List<string>(); _ = TagReferences.Lex("XIC(" + operand + ");", issues.Add).ToArray(); Assert.Contains("unsupported_qualified_address",issues); }
+    [Fact]
+    public void Dynamic_native_IO_indexes_retain_separate_user_dependencies_and_exact_spans()
+    {
+        const string text="CPS(Device:I.Data[Index+1],InputData,1)MOV(Local:2:O.Data[Items[Index]],Value);";
+        var issues=new List<string>(); var tokens=TagReferences.Lex(text,issues.Add).ToArray(); Assert.Empty(issues);
+        Assert.Contains(tokens,t=>t.Name=="Device:I"&&t.Status=="dynamic_address_candidate"); Assert.Contains(tokens,t=>t.Name=="Local:2:O");
+        Assert.Equal(2,tokens.Count(t=>t.Name=="Index"&&t.Role=="index_expression")); Assert.Contains(tokens,t=>t.Name=="Items"&&t.Role=="index_expression");
+        Assert.DoesNotContain(tokens,t=>t.Name is "Device" or "Local" or "Data");
+        Assert.All(tokens,t=>Assert.False(string.IsNullOrWhiteSpace(text.Substring(t.Start,t.Length))));
+    }
     private readonly string root = Path.Combine(Path.GetTempPath(), "RockwellTagReferences", Guid.NewGuid().ToString("N"));
     private readonly ProjectService service;
     public TagReferenceTests()
@@ -153,7 +176,7 @@ public sealed class TagReferenceTests : IDisposable
     [Fact]
     public async Task DiagnosticsAreBoundedAndUnrelatedCandidatesDoNotExhaustAnExactQuery()
     {
-        var p = await Register(Document(Enumerable.Repeat("Local:1:I.Data;", 60).ToArray())); var report = Find(p);
+        var p = await Register(Document(Enumerable.Repeat("Unknown:1:Q.Data;", 60).ToArray())); var report = Find(p);
         Assert.True(report.DiagnosticsTruncated); Assert.Equal(50, report.Diagnostics.Length); Assert.Empty(report.References);
         var large = await Register(Document([], [string.Concat(Enumerable.Repeat("Other;", 100001)) + "Value:=1;"]));
         var exact = Find(large);

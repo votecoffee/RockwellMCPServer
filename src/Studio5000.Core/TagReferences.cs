@@ -20,6 +20,28 @@ public static class TagReferences
     private static bool Word(char c) => char.IsAsciiLetterOrDigit(c) || c == '_';
     private static bool Initial(char c) => char.IsAsciiLetter(c) || c == '_';
     private static bool Same(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+    private static readonly HashSet<string> StatusFlags = new(["FS", "N", "Z", "V", "C", "MINOR"], StringComparer.OrdinalIgnoreCase);
+
+    // Native status keywords are not user tags. Keep native I/O roots whole so
+    // Device:I.Data never becomes a reference to a user declaration named Device.
+    private static bool NativeQualifiedRoot(char[] source, string root, int colon, int end, out int nameEnd)
+    {
+        var cursor = colon + 1; var slot = false;
+        if (cursor < end && char.IsAsciiDigit(source[cursor]))
+        {
+            slot = true;
+            while (cursor < end && char.IsAsciiDigit(source[cursor])) cursor++;
+            if (cursor >= end || source[cursor++] != ':') { nameEnd = colon; return false; }
+        }
+        var start = cursor;
+        if (cursor < end && Initial(source[cursor])) while (cursor < end && Word(source[cursor])) cursor++;
+        var qualifier = new string(source, start, cursor - start); nameEnd = cursor;
+        if (!slot && Same(root, "S") && StatusFlags.Contains(qualifier))
+            return cursor == end || source[cursor] is not ('.' or '[' or ':' or '(');
+        if (qualifier.Length != 1 || char.ToUpperInvariant(qualifier[0]) is not ('I' or 'O' or 'C')) return false;
+        return cursor == end || source[cursor] is not (':' or '(') &&
+            (source[cursor] != '.' || cursor + 1 < end && Word(source[cursor + 1]));
+    }
 
     public static TagReferenceReport Find(ProjectInfo project, XDocument document, TagReferenceRequest request)
     {
@@ -162,7 +184,7 @@ public static class TagReferences
                 if (char.IsAsciiDigit(masked[position]))
                 { while (position < end && (Word(masked[position]) || masked[position] is '#' or '.')) position++; continue; }
                 if (!Initial(masked[position])) { position++; continue; }
-                var start = position; var name = Name(); string? program = null;
+                var start = position; var name = Name(); string? program = null; var nativeQualified = false;
                 if (start > from && masked[start - 1] is '.' or ':' or '#') continue;
                 if (position < end && masked[position] == '#')
                 { while (position < end && (Word(masked[position]) || masked[position] is '#' or '.')) position++; continue; }
@@ -172,11 +194,19 @@ public static class TagReferences
                     if (position + 1 >= end || masked[position] != '.' || !Initial(masked[position + 1])) { diagnose("unsupported_qualified_address"); continue; }
                     position++; name = Name();
                 }
-                else if (position + 1 < end && masked[position] == ':' && masked[position + 1] != '=')
+                else if (position < end && masked[position] == ':' && (position + 1 == end || masked[position + 1] != '='))
                 {
-                    diagnose("unsupported_qualified_address");
-                    while (position < end && (Word(masked[position]) || masked[position] is ':' or '.' or '[' or ']')) position++;
-                    continue;
+                    if (NativeQualifiedRoot(masked, name, position, end, out var nameEnd))
+                    {
+                        if (nameEnd - start > 4096) throw new OperationException("tag_reference_limit", "Native address text exceeds 4096 characters.");
+                        position = nameEnd; name = text[start..position]; nativeQualified = true;
+                    }
+                    else
+                    {
+                        diagnose("unsupported_qualified_address");
+                        while (position < end && (Word(masked[position]) || masked[position] is ':' or '.' or '[' or ']')) position++;
+                        continue;
+                    }
                 }
                 var indices = new List<(int Start, int End)>(); var status = "candidate";
                 while (position < end)
@@ -197,6 +227,8 @@ public static class TagReferences
                     }
                     else break;
                 }
+                if (nativeQualified && position < end && masked[position] is ':' or '.')
+                { diagnose("unsupported_qualified_address"); status = "syntax_unresolved"; }
                 var look = position; while (look < end && char.IsWhiteSpace(masked[look])) look++;
                 if (!(look < end && masked[look] == '(') && name.ToUpperInvariant() is not ("TRUE" or "FALSE" or "AND" or "OR" or "NOT" or "XOR" or "MOD"))
                 {

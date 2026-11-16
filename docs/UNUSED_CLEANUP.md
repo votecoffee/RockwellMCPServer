@@ -1,5 +1,11 @@
 # Reviewed unused declaration cleanup
 
+The shared lexer recognizes case-insensitive `S:FS`, `S:N`, `S:Z`, `S:V`, `S:C`, `S:MINOR` and native `Device:I` / `Device:O` / `Device:C` roots, including numeric-slot forms such as `Local:1:I.Data[0]`. It preserves qualified roots and scans dynamic index expressions separately. These forms no longer produce an unsupported-qualified-address diagnostic or false plain-tag/type mentions. Recognition is lexical; it does not validate hardware, members or runtime behavior. [Rockwell status keywords](https://www.rockwellautomation.com/en-ua/docs/studio-5000-logix-designer/37-00/contents-ditamap/math-status-flags.html)
+
+New previews expose additive `coverage`: `readableUnits`, `lexicalUnresolvedUnits`, `protectedAoiRoots`, `otherOpaqueRoots`, `unsupportedOrMissingUnits`, `readableLexicalCoverageComplete`, and `hiddenOrUnsupportedSourcePresent`. `partial` aggregates unresolved coverage and must not be interpreted as proof of protected content. A readable lexical problem retains matching candidate mentions with its actual diagnostic code. `protected-aoi-hidden-dependencies` is reserved for actual protected AOI `EncodedData`, including direct siblings of readable definitions under AddOnInstructionDefinitions. Three such siblings remain three protected roots even when all readable logic scans cleanly; their possible hidden dependencies stay retained.
+
+New preview receipts also identify `producer` and `toolVersion`; the receipt SHA binds this metadata. Older receipts can lack coverage or producer fields. Missing historical metadata remains unknown and is not backfilled; completed applies retain their original evidence. Obtain a new reviewed preview if an uncompleted old review no longer matches the current producer.
+
 `studio_unused_cleanup_preview` reviews an explicit set of whole tags, UDTs and AOI definitions in a registered saved controller export. It supports full exports within 64 MiB, 1000000 XML elements and 64 XML nesting levels. The export must declare `TargetType="Controller"` and `ContainsContext="false"`. It never infers complete references from a partial export or modifies the input.
 
 Use the same standalone CLI workspace throughout. Discover each schema with `operation-help`. Example `arguments` for the preview:
