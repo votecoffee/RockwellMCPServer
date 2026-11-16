@@ -76,6 +76,9 @@ public static class EngineeringOperations
         add("POST", "/api/program-imports/readback", (ProjectService service, ProgramImportReadbackRequest request) => service.CheckProgramImportReadback(request));
         add("POST", "/api/structural-edits/context/batch", (ProjectService service, StructuralContextRequest request, CancellationToken ct) => service.StructuralContextAsync(request, ct));
         add("POST", "/api/structural-edits/preview", (ProjectService service, StructuralEditRequest request, CancellationToken ct) => service.PreviewStructuralEditsAsync(request, ct));
+        add("POST", "/api/aoi-dependencies/plan", (ProjectService service, AoiDependencyPlanRequest request, CancellationToken ct) => service.PlanAoiDependenciesAsync(request, ct));
+        add("POST", "/api/aoi-addresses/plan", (ProjectService service, AoiAddressPlanRequest request, CancellationToken ct) => service.PlanAoiAddressesAsync(request, ct));
+        add("POST", "/api/preservation-chains/review", (ProjectService service, PreservationChainRequest request, CancellationToken ct) => service.ReviewPreservationChainAsync(request, ct));
         add("POST", "/api/unused-cleanup/preview", (ProjectService service, UnusedCleanupRequest request, CancellationToken ct) => service.PreviewUnusedCleanupAsync(request, ct));
         add("POST", "/api/unused-cleanup/apply", (ProjectService service, UnusedCleanupApplyRequest request, CancellationToken ct) => service.ApplyUnusedCleanupAsync(request, ct));
         add("GET", "/api/unused-cleanup/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.UnusedCleanupStatusAsync(id, expectedSha256, ct));

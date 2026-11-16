@@ -11,7 +11,9 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(181, operations.Length); Assert.Equal(181, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(184, operations.Length); Assert.Equal(184, operations.Select(o => o.Name).Distinct().Count());
+        foreach (var name in new[] { "studio_aoi_dependency_plan", "studio_preservation_chain_review" }) Assert.Equal("preview", operations.Single(o => o.Name == name).Effect);
+        Assert.Equal("read", operations.Single(o => o.Name == "studio_aoi_address_plan").Effect);
         foreach (var name in new[] { "studio_timer_ownership_audit", "studio_timer_reference_rename_preview" }) Assert.Equal("read", operations.Single(o => o.Name == name).Effect);
         var timerRename = operations.Single(o => o.Name == "studio_timer_reference_rename_preview").InputSchema.GetProperty("properties").GetProperty("request").GetProperty("properties");
         foreach (var name in new[] { "expectedSha256", "expectedAuditSha256", "ownerId", "newTagName", "consumerRoutineXPaths" }) Assert.True(timerRename.TryGetProperty(name, out _));

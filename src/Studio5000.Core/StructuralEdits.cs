@@ -27,7 +27,7 @@ public sealed record StructuralContext(ComparisonSnapshot Source, int Total, Str
 public sealed record StructuralFinding(string Status, string Check, string Location, string Detail);
 public sealed record StructuralChange(string Operation, string XPath, string BeforeSha256, string? FragmentSha256, string Kind, string? Name, string? ProgramName, bool Safety);
 public sealed record StructuralReferenceBinding(string Key, string Kind, string Name, string SourceSha256, string ElementSha256);
-internal sealed record ResolvedStructuralReference(StructuralReferenceBinding Binding, string Xml, Dictionary<string, string> TypeLayouts, string[] Aois);
+internal sealed record ResolvedStructuralReference(StructuralReferenceBinding Binding, string Xml, Dictionary<string, string> TypeLayouts, string[] Aois, Dictionary<string, string> AoiContracts);
 public sealed record StructuralPreservation(int UntouchedTags, string UntouchedTagSetSha256, int PreservedTagValueSets, string PreservedTagValueSetSha256,
     int ProtectedSubtrees, string ProtectedSubtreeSetSha256, bool UnselectedBytesPreserved);
 public sealed record StructuralEditPreview(StructuralEditRequest Request, ComparisonSnapshot Source, string PlanSha256, string ReviewSha256,
@@ -241,12 +241,16 @@ internal static partial class StructuralEditing
         void oldTagsLookup(StructuralTagScope selected, out XElement? tag) => beforeTags.TryGetValue(Key(selected.ProgramName, selected.TagName), out tag);
         if (usedReferences.Count != references.Length) throw new OperationException("structural_reference", "Every declared exact reference addition must be selected by the batch.");
         var afterTypes = Types(actual); var afterAoiNames = actual.Root!.Element("Controller")!.Elements("AddOnInstructionDefinitions").Elements().Select(Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var afterAois = actual.Root.Element("Controller")!.Elements("AddOnInstructionDefinitions").Elements().ToDictionary(n => Name(n)!, StringComparer.OrdinalIgnoreCase);
         foreach (var reference in references)
         {
             foreach (var (type, layout) in reference.TypeLayouts)
                 if (!afterTypes.TryGetValue(type, out var definition)) findings.Add(new("blocked", "reference-type-dependency", reference.Binding.Name, "Required reference UDT is absent after the batch: " + type));
                 else if (LayoutFingerprint(definition) != layout) findings.Add(new("blocked", "reference-layout-mismatch", reference.Binding.Name, "Existing/added UDT layout differs from the exact reference dependency: " + type + ". No library upgrade or struct resizing is inferred."));
             foreach (var aoi in reference.Aois.Where(t => !afterAoiNames.Contains(t))) findings.Add(new("blocked", "reference-aoi-dependency", reference.Binding.Name, "Required reference AOI is absent after the batch: " + aoi));
+            foreach (var (name, contract) in reference.AoiContracts)
+                if (afterAois.TryGetValue(name, out var definition) && AoiDependencyPlanning.Contract(definition) != contract)
+                    findings.Add(new("blocked", "reference-aoi-contract-mismatch", reference.Binding.Name, "Existing/added AOI dependency differs from the pinned source definition: " + name + ". A same-name library is not a compatible dependency proof."));
         }
         Dependencies(doc, actual, wholeTags, findings);
         foreach (var metadata in LogixMemberMetadata.AuthoredFindings(doc, actual))

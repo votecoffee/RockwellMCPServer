@@ -49,7 +49,29 @@ public sealed partial class ProjectService
                 var masked = new string(TagReferences.MaskSource(code.Value, _ => { }));
                 foreach (Match match in Regex.Matches(masked, @"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1))) if (aoiNames.Contains(match.Groups[1].Value)) usedAois.Add(match.Groups[1].Value);
             }
-            usedAois.Remove(addition.Name); results.Add(new(new(addition.Key, addition.Kind, addition.Name, addition.Source.Sha256.ToLowerInvariant(), addition.ExpectedElementSha256.ToLowerInvariant()), xml, layouts, usedAois.ToArray()));
+            usedAois.Remove(addition.Name);
+            var contracts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var aoiDefinitions = parsed.Doc.Root.Element("Controller")!.Elements("AddOnInstructionDefinitions").Elements().Where(e => e.Attribute("Name") is not null).ToDictionary(e => (string)e.Attribute("Name")!, StringComparer.OrdinalIgnoreCase);
+            var pendingAois = new Queue<string>(usedAois); var scannedText = 0;
+            while (pendingAois.TryDequeue(out var aoi))
+            {
+                if (contracts.ContainsKey(aoi)) continue;
+                if (contracts.Count >= 256) throw new OperationException("structural_limit", "Reference AOI closure exceeds 256 definitions.");
+                var definition = aoiDefinitions[aoi]; contracts.Add(aoi, AoiDependencyPlanning.Contract(definition));
+                foreach (var attribute in definition.DescendantsAndSelf().Attributes("DataType"))
+                    if (aoiNames.Contains(attribute.Value) && attribute.Value != addition.Name) pendingAois.Enqueue(attribute.Value);
+                    else if (types.TryGetValue(attribute.Value, out var type) && layouts.TryAdd(attribute.Value, StructuralEditing.LayoutFingerprint(type)))
+                        foreach (var dependency in type.Elements("Members").Elements("Member").Attributes("DataType")) pending.Enqueue(dependency.Value);
+                foreach (var code in definition.Descendants().Where(e => e.Name.LocalName is "Text" or "Line"))
+                {
+                    if ((scannedText += code.Value.Length) > 16 * 1024 * 1024) throw new OperationException("structural_limit", "Reference AOI closure exceeds 16 MiB source text.");
+                    var masked = new string(TagReferences.MaskSource(code.Value, _ => { }));
+                    foreach (Match match in Regex.Matches(masked, @"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
+                        if (aoiNames.Contains(match.Groups[1].Value) && !string.Equals(match.Groups[1].Value, addition.Name, StringComparison.OrdinalIgnoreCase)) pendingAois.Enqueue(match.Groups[1].Value);
+                }
+            }
+            while (pending.TryDequeue(out var name)) if (types.TryGetValue(name, out var type) && layouts.TryAdd(name, StructuralEditing.LayoutFingerprint(type))) foreach (var member in type.Elements("Members").Elements("Member").Attributes("DataType")) pending.Enqueue(member.Value);
+            results.Add(new(new(addition.Key, addition.Kind, addition.Name, addition.Source.Sha256.ToLowerInvariant(), addition.ExpectedElementSha256.ToLowerInvariant()), xml, layouts, contracts.Keys.ToArray(), contracts));
         }
         return results.ToArray();
     }

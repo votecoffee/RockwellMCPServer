@@ -12,6 +12,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
     private sealed record WatchChoice(WatchStatus Status) { public override string ToString() => Status.Definition.Settings.Name + " • r" + Status.Definition.Revision + " • " + Status.State; }
     private static ActionItem A(string name, string title) => new("studio_" + name, title);
     private static readonly Workflow[] Workflows = [
+        new("AOI dependencies and fresh preservation", "Pin the reviewed reference and original fresh export. Plan explicit new standard readable RLL AOI/UDT identities, then combine the returned reference additions and edits with a separately reviewed structural scope. Existing tags, configuration and libraries stay fresh. Plan exact device address operands when needed, and compose completed structural receipts back to the original fresh export. Safety overlays remain separately authorized review-only work. No native execution.",
+            [A("aoi_dependency_plan", "Plan source-pinned AOI dependencies"), A("aoi_address_plan", "Plan fresh device address operands"), A("structural_edit_preview", "Review the explicit structural batch"), A("structural_edit_apply", "Publish the reviewed candidate"), A("preservation_chain_review", "Compose original-fresh preservation receipt")]),
         new("Logic tracing", "Select the modified/project snapshot, a tag and optional program. Trace readers/writers and dependencies across routines, aliases and AOI parameters. Review diagnostics for unknown effects, addressing and protected source.",
             [A("logic_trace", "Trace readers, writers and dependencies")]),
         new("Timer ownership", "Select a saved project and audit resolved TIMER storage. Multiple direct owners remain flagged across opposite JSR gates. Review caller/guard and AOI-template coverage separately. To preview a private program timer, copy the exact audit hash and owner ID, choose a fresh name and optional same-program consumer routine paths. Review all producer/EN/DN/TT/PRE/ACC/RES references and retained original users. No apply or native work.",
@@ -126,6 +128,9 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var safetyEdit = new SafetyIoEditRequest(safetySource, "", [], []);
         object? request = operation switch
         {
+            "studio_aoi_dependency_plan" => new AoiDependencyPlanRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), new(f?.Id ?? "", f?.CurrentSha256 ?? ""), [], [], []),
+            "studio_aoi_address_plan" => new AoiAddressPlanRequest(new(f?.Id ?? "", f?.CurrentSha256 ?? ""), new(p?.Id ?? "", p?.CurrentSha256 ?? ""), []),
+            "studio_preservation_chain_review" => new PreservationChainRequest(new(f?.Id ?? "", f?.CurrentSha256 ?? ""), new(selectedCandidate?.Id ?? "", selectedCandidate?.CurrentSha256 ?? ""), []),
             "studio_timer_ownership_audit" => new TimerOwnershipRequest(p?.CurrentSha256 ?? ""),
             "studio_timer_reference_rename_preview" => new TimerReferenceRenameRequest(p?.CurrentSha256 ?? "", "", "", "PrivateTimer"),
             "studio_selector_refactor_preview" => new SelectorRefactorRequest(p?.CurrentSha256 ?? "", "/RSLogix5000Content/Controller/Programs/Program[@Name='" + program.Text + "']/Routines/Routine[@Name='main']", 0, "SelectorRoute"),
