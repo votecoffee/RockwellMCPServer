@@ -16,9 +16,12 @@ public sealed record ProtectedDependencyRecordRequest(ProtectedDependencyPreview
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProtectedDependencyEvidenceRef(string ArtifactId, string Sha256);
 public sealed record ProtectedDependencyDefinition(string Kind, string Name, string SourceContractSha256, string NativeDefinitionSha256);
+public sealed record ProtectedDependencyIntrinsic(string Name, string Class, string Family, string Registry,
+    string NativeContractSha256, string NativeDefinitionSha256, string? SourceContractSha256);
 public sealed record ProtectedDependencyRoot(string AoiName, string SourceElementSha256, string NativeExportElementSha256,
     string SourceRelationship, string NativeInputSha256, string? NativeReadbackSha256, string JobId, string JobEvidenceSha256,
-    string? SdkAssembly, Artifact NativeExport, ProtectedDependencyDefinition[] Dependencies);
+    string? SdkAssembly, Artifact NativeExport, ProtectedDependencyDefinition[] Dependencies,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProtectedDependencyIntrinsic[]? IntrinsicTypes = null);
 public sealed record ProtectedDependencyPreview(ComparisonSnapshot Source, bool CanIssue, ProtectedDependencyRoot[] Roots,
     StructuralFinding[] Findings, string ReviewSha256, string Boundary);
 public sealed record ProtectedDependencyEvidence(Artifact Receipt, Artifact SourceSnapshot, ProtectedDependencyPreview Review);
@@ -29,12 +32,19 @@ internal sealed record ResolvedProtectedDependency(string AoiName, string Source
 
 internal static class ProtectedDependencyPolicy
 {
+    internal const string IntrinsicRegistry = "logix-builtins-v1";
     internal const string Boundary = "Reviewed native dependency context for explicitly bound protected AOIs. Requires a completed offline SDK partial-export job, exact retained input L5X or same-job full ACD readback, Dependencies/ForceProtectedEncoding context and matching source type/library contracts. Export ciphertext may be re-encoded and is never compared as identity. Reuse binds original source opaque bytes and all manifested contracts. Library closure only: hidden tag/external/runtime bindings remain unproved. No native dispatch, decryption, general override or safety/deployment acceptance.";
     internal static XElement Controller(XDocument doc) => doc.Root?.Element("Controller") ?? throw Error("A named Controller is required.");
     internal static Dictionary<string, XElement> Types(XDocument doc) => Index(Controller(doc).Elements("DataTypes").Elements("DataType"));
     internal static Dictionary<string, XElement> Aois(XDocument doc) => Index(Controller(doc).Elements("AddOnInstructionDefinitions").Elements().Where(e => e.Name == "AddOnInstructionDefinition" || (string?)e.Attribute("EncodedType") == "AddOnInstructionDefinition"));
     private static Dictionary<string, XElement> Index(IEnumerable<XElement> nodes) => LogixPreservation.Index(nodes, n => (string?)n.Attribute("Name") ?? throw Error("A dependency definition has no name."));
     internal static bool Protected(XElement node) => node.Name == "EncodedData" || node.Descendants("EncodedData").Any();
+    // Explicit vendor class plus a known name is required. Family metadata is
+    // checked and retained; the native layout is reviewed evidence, not an
+    // invented source definition or a blanket ProductDefined exemption.
+    internal static bool Intrinsic(XElement node) => ProgramImportPackaging.IsBuiltInType((string?)node.Attribute("Name") ?? "") &&
+        (string?)node.Attribute("Class") == "ProductDefined" &&
+        (string?)node.Attribute("Family") == (string.Equals((string?)node.Attribute("Name"), "STRING", StringComparison.OrdinalIgnoreCase) ? "StringFamily" : "NoFamily");
     internal static string Contract(XElement node)
     { var copy = new XElement(node); copy.Attribute("Use")?.Remove(); return node.Name == "DataType" ? StructuralEditing.LayoutFingerprint(copy) : LogixPreservation.Fingerprint(copy)!; }
     internal static void FullSource(XDocument doc)
@@ -131,11 +141,20 @@ public sealed partial class ProjectService
                 ((string?)native.Root.Attribute("SoftwareRevision"))?.Split('.')[0] != ((string?)doc.Root!.Attribute("SoftwareRevision"))?.Split('.')[0] ||
                 !nativeAois.TryGetValue(export.AoiName, out var encoded) || !ProtectedDependencyPolicy.Protected(encoded))
             { Block(export.AoiName, "Require a matching major-revision AOI-target export with Dependencies, ForceProtectedEncoding, explicit context/types and opaque target payload."); continue; }
-            var dependencies = new List<ProtectedDependencyDefinition>(); var start = findings.Count;
+            var dependencies = new List<ProtectedDependencyDefinition>(); var intrinsics = new List<ProtectedDependencyIntrinsic>(); var start = findings.Count;
             foreach (var (name, definition) in nativeTypes)
             {
-                if (!types.TryGetValue(name, out var originalType) || ProtectedDependencyPolicy.Contract(originalType) != ProtectedDependencyPolicy.Contract(definition)) Block(name, "Native dependent type is absent or its layout differs from the bound source; native normalization is not silently accepted.");
-                else dependencies.Add(new("udt", name, ProtectedDependencyPolicy.Contract(originalType), nativeLexical.Fingerprint(definition)));
+                var present = types.TryGetValue(name, out var originalType);
+                if (ProtectedDependencyPolicy.Intrinsic(definition))
+                {
+                    var nativeContract = ProtectedDependencyPolicy.Contract(definition);
+                    if (present && ProtectedDependencyPolicy.Contract(originalType!) != nativeContract)
+                        Block(name, "An explicit source definition conflicts with native intrinsic metadata; user-defined or existing-layout differences are not exempted.");
+                    else intrinsics.Add(new(name, (string)definition.Attribute("Class")!, (string)definition.Attribute("Family")!, ProtectedDependencyPolicy.IntrinsicRegistry,
+                        nativeContract, nativeLexical.Fingerprint(definition), present ? ProtectedDependencyPolicy.Contract(originalType!) : null));
+                }
+                else if (!present || ProtectedDependencyPolicy.Contract(originalType!) != ProtectedDependencyPolicy.Contract(definition)) Block(name, "Native dependent type is absent or its layout differs from the bound source; native normalization is not silently accepted.");
+                else dependencies.Add(new("udt", name, ProtectedDependencyPolicy.Contract(originalType!), nativeLexical.Fingerprint(definition)));
             }
             foreach (var (name, definition) in nativeAois)
             {
@@ -155,9 +174,9 @@ public sealed partial class ProjectService
                     @"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2)))
                     if (aois.ContainsKey(call.Groups[1].Value) && !nativeAois.ContainsKey(call.Groups[1].Value)) Block(call.Groups[1].Value, "Readable native AOI calls a source AOI omitted from its dependency context.");
             }
-            if (dependencies.Count > 2048 || roots.Sum(r => r.Dependencies.Length) + dependencies.Count > 8192) throw ProtectedDependencyPolicy.Error("Native dependency manifest exceeds 2048 definitions per root / 8192 total.");
+            if (dependencies.Count + intrinsics.Count > 2048 || roots.Sum(r => r.Dependencies.Length + (r.IntrinsicTypes?.Length ?? 0)) + dependencies.Count + intrinsics.Count > 8192) throw ProtectedDependencyPolicy.Error("Native dependency manifest exceeds 2048 definitions per root / 8192 total.");
             if (findings.Skip(start).Any(f => f.Status == "blocked")) continue;
-            roots.Add(new(export.AoiName, lexical.Fingerprint(original), nativeLexical.Fingerprint(encoded), cached.Relationship, cached.InputHash, cached.Readback, jobId, cached.Hash, cached.Job.SdkAssembly, artifact, dependencies.ToArray()));
+            roots.Add(new(export.AoiName, lexical.Fingerprint(original), nativeLexical.Fingerprint(encoded), cached.Relationship, cached.InputHash, cached.Readback, jobId, cached.Hash, cached.Job.SdkAssembly, artifact, dependencies.ToArray(), intrinsics.Count == 0 ? null : intrinsics.ToArray()));
         }
         var report = new ProtectedDependencyPreview(new(source.Project.Id, source.Project.Name, source.Project.Revision, source.Project.CurrentSha256), roots.Count == request.Exports.Length && findings.All(f => f.Status != "blocked"), roots.ToArray(), findings.ToArray(), "", ProtectedDependencyPolicy.Boundary);
         report = report with { ReviewSha256 = Hash(JsonSerializer.SerializeToUtf8Bytes(new { request, report }, Json)) };
@@ -227,6 +246,13 @@ public sealed partial class ProjectService
                     if (!index.TryGetValue(dependency.Name, out var definition) ||
                         (ProtectedDependencyPolicy.Protected(definition) ? lexical.Fingerprint(definition) : ProtectedDependencyPolicy.Contract(definition)) != dependency.SourceContractSha256)
                         throw ProtectedDependencyPolicy.Error("A manifested source type/AOI contract is missing or changed: " + dependency.Name);
+                }
+                foreach (var intrinsic in root.IntrinsicTypes ?? [])
+                {
+                    var present = types.TryGetValue(intrinsic.Name, out var definition);
+                    if (intrinsic.SourceContractSha256 is not null ? !present || ProtectedDependencyPolicy.Contract(definition!) != intrinsic.SourceContractSha256
+                        : present && (!ProtectedDependencyPolicy.Intrinsic(definition!) || ProtectedDependencyPolicy.Contract(definition!) != intrinsic.NativeContractSha256))
+                        throw ProtectedDependencyPolicy.Error("A current definition conflicts with reviewed native intrinsic metadata: " + intrinsic.Name);
                 }
                 if (!resolved.TryAdd(root.AoiName, new(root.AoiName, root.SourceElementSha256, root.Dependencies, reference.Sha256)))
                     throw ProtectedDependencyPolicy.Error("Duplicate/conflicting evidence for one protected root is not accepted.");

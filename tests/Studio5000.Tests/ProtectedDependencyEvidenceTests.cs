@@ -30,6 +30,16 @@ public sealed class ProtectedDependencyEvidenceTests : IDisposable
     private static XDocument Native(int index) => new(new XElement("RSLogix5000Content", new XAttribute("SoftwareRevision", "35.00"), new XAttribute("TargetType", "AddOnInstructionDefinition"),
         new XAttribute("TargetName", "Opaque" + index), new XAttribute("ContainsContext", "true"), new XAttribute("ExportOptions", "Dependencies ForceProtectedEncoding"),
         new XElement("Controller", new XAttribute("Name", "Synthetic"), new XElement("DataTypes", Type()), new XElement("AddOnInstructionDefinitions", Opaque(index, true), Aoi("HiddenHelper")))));
+    private static XDocument NativeWithIntrinsics(int index)
+    {
+        var doc = Native(index); doc.Root!.SetAttributeValue("ExportOptions", "Dependencies ForceProtectedEncoding ProductDefinedTypes");
+        var types = doc.Descendants("DataTypes").Single();
+        foreach (var name in new[] { "BOOL", "DINT", "SINT", "INT", "REAL" })
+            types.Add(new XElement("DataType", new XAttribute("Name", name), new XAttribute("Family", "NoFamily"), new XAttribute("Class", "ProductDefined")));
+        types.Add(XElement.Parse("<DataType Name='STRING' Family='StringFamily' Class='ProductDefined'><Members><Member Name='LEN' DataType='DINT' Dimension='0'/><Member Name='DATA' DataType='SINT' Dimension='82'/></Members></DataType>"));
+        types.Add(XElement.Parse("<DataType Name='TIMER' Family='NoFamily' Class='ProductDefined'><Members><Member Name='Control' DataType='DINT' Dimension='0' Hidden='true'/><Member Name='PRE' DataType='DINT' Dimension='0'/><Member Name='ACC' DataType='DINT' Dimension='0'/><Member Name='EN' DataType='BIT' Target='Control' BitNumber='31'/><Member Name='TT' DataType='BIT' Target='Control' BitNumber='30'/><Member Name='DN' DataType='BIT' Target='Control' BitNumber='29'/></Members></DataType>"));
+        return doc;
+    }
     private async Task<ProjectInfo> Register(XDocument doc)
     {
         var path = Path.Combine(root, Guid.NewGuid().ToString("N") + ".l5x"); File.WriteAllText(path, doc.ToString(SaveOptions.DisableFormatting), new UTF8Encoding(false));
@@ -204,6 +214,44 @@ public sealed class ProtectedDependencyEvidenceTests : IDisposable
         Assert.False((await service.PreviewProtectedDependenciesAsync(f.Request)).CanIssue);
     }
 
+    [Theory]
+    [InlineData("missing-class")] [InlineData("user-class")] [InlineData("unknown-product")] [InlineData("family")]
+    [InlineData("source-user-collision")] [InlineData("source-layout")] [InlineData("user-udt-drift")]
+    public async Task Intrinsic_classification_does_not_exempt_unknown_types_or_existing_source_contracts(string failure)
+    {
+        var source = Source();
+        if (failure is "source-user-collision" or "source-layout") source.Descendants("DataTypes").Single().Add(XElement.Parse(failure == "source-user-collision"
+            ? "<DataType Name='DINT' Class='User' Family='NoFamily'><Members/></DataType>"
+            : "<DataType Name='DINT' Class='ProductDefined' Family='NoFamily'><Members><Member Name='Changed' DataType='BOOL'/></Members></DataType>"));
+        var f = await Retain(source: source, native: i =>
+        {
+            var native = NativeWithIntrinsics(i); var dint = native.Descendants("DataType").Single(d => (string?)d.Attribute("Name") == "DINT");
+            switch (failure)
+            {
+                case "missing-class": dint.Attribute("Class")!.Remove(); break;
+                case "user-class": dint.SetAttributeValue("Class", "User"); break;
+                case "unknown-product": dint.SetAttributeValue("Name", "UnregisteredVendorType"); break;
+                case "family": dint.SetAttributeValue("Family", "StringFamily"); break;
+                case "user-udt-drift": native.Descendants("DataType").Single(d => (string?)d.Attribute("Name") == "HiddenString").Descendants("Member").First().SetAttributeValue("DataType", "REAL"); break;
+            }
+            return native;
+        });
+        Assert.False((await service.PreviewProtectedDependenciesAsync(f.Request)).CanIssue);
+    }
+
+    [Fact]
+    public async Task Intrinsic_receipt_reuse_rejects_new_user_collisions_and_preserves_explicit_native_contracts()
+    {
+        var f = await Retain(native: NativeWithIntrinsics); var proof = await Issue(f.Request);
+        var changed = Source(); changed.Descendants("DataTypes").Single().Add(XElement.Parse("<DataType Name='BOOL' Class='User' Family='NoFamily'><Members/></DataType>"));
+        var collision = await Register(changed); await Assert.ThrowsAsync<OperationException>(() => service.PreviewUnusedCleanupAsync(Cleanup(collision, [proof])));
+        var explicitSource = Source(); explicitSource.Descendants("DataTypes").Single().Add(XElement.Parse("<DataType Name='BOOL' Class='ProductDefined' Family='NoFamily'/>"));
+        var explicitFixture = await Retain(source: explicitSource, native: NativeWithIntrinsics); var explicitProof = await Issue(explicitFixture.Request);
+        var explicitReview = await service.PreviewProtectedDependenciesAsync(explicitFixture.Request);
+        Assert.All(explicitReview.Roots, r => Assert.NotNull(r.IntrinsicTypes!.Single(i => i.Name == "BOOL").SourceContractSha256));
+        var missing = await Register(Source()); await Assert.ThrowsAsync<OperationException>(() => service.PreviewUnusedCleanupAsync(Cleanup(missing, [explicitProof])));
+    }
+
     [Fact]
     public async Task Full_decorated_controller_is_target_filtered_with_all_unselected_bytes_preserved()
     {
@@ -211,7 +259,10 @@ public sealed class ProtectedDependencyEvidenceTests : IDisposable
         full.Root!.SetAttributeValue("TargetType", "Controller"); full.Root.SetAttributeValue("ContainsContext", "false"); full.Root.SetAttributeValue("SoftwareRevision", "35.00");
         var small = Source().Root!.Element("Controller")!; var controller = full.Root.Element("Controller")!;
         controller.Element("DataTypes")!.Add(Type()); controller.Add(new XElement(small.Element("AddOnInstructionDefinitions")!));
-        var f = await Retain(source: full); var proof = await Issue(f.Request); var before = File.ReadAllBytes(f.Source.SourcePath);
+        Assert.DoesNotContain(full.Descendants("DataType"), t => (string?)t.Attribute("Name") is "BOOL" or "DINT");
+        var f = await Retain(source: full, native: NativeWithIntrinsics); var proof = await Issue(f.Request); var before = File.ReadAllBytes(f.Source.SourcePath);
+        var evidence = await service.PreviewProtectedDependenciesAsync(f.Request); Assert.True(evidence.CanIssue);
+        Assert.All(evidence.Roots, r => { Assert.Equal(7, r.IntrinsicTypes!.Length); Assert.All(r.IntrinsicTypes, i => { Assert.Null(i.SourceContractSha256); Assert.Equal("ProductDefined", i.Class); Assert.Equal("logix-builtins-v1", i.Registry); Assert.NotEmpty(i.NativeDefinitionSha256); }); });
         var preview = await service.PreviewUnusedCleanupAsync(Cleanup(f.Source, [proof], "SpareA", "SpareB")); Assert.Equal(2, preview.Removals.Length); Assert.True(preview.Coverage!.ReadableUnits >= 14500);
         var result = await service.ApplyUnusedCleanupAsync(new(preview.Request, preview.ReviewSha256, preview.PreviewReceipt!.Id, preview.PreviewReceipt.Sha256));
         var expected = Encoding.UTF8.GetString(before).Replace(Aoi("SpareA").ToString(SaveOptions.DisableFormatting), "", StringComparison.Ordinal).Replace(Aoi("SpareB").ToString(SaveOptions.DisableFormatting), "", StringComparison.Ordinal);
