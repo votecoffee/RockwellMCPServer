@@ -48,9 +48,8 @@ internal static class WorkspaceRun
         return commandSeconds - 30;
     }
 
-    public static async Task<object> ExecuteAsync(string job, string requestPath, int timeoutSeconds)
+    public static async Task<object> ExecuteAsync(string job, string requestPath, int timeoutSeconds, byte[] bytes)
     {
-        var bytes = L5xSummary.ReadBytes(requestPath, MaximumRequestBytes);
         var request = ReadJson<Request>(bytes);
         var steps = Validate(request);
         var workspace = Path.Combine(EngineeringCli.StateRoot, "workspaces", request.Workspace);

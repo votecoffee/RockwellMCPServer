@@ -27,7 +27,20 @@ public sealed class EngineeringCliDeadlineTests : IDisposable
         File.WriteAllText(path, "{\"allowNative\":false}");
         Assert.True(WorkspaceRun.AllowsNative(pinned));
         Assert.NotEqual(pinned, File.ReadAllBytes(path));
+        Assert.Equal(pinned, EngineeringCli.ReadPinnedRequest(new StringReader(Convert.ToBase64String(pinned))));
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("incomplete!")]
+    public void Owned_request_transport_rejects_empty_or_corrupt_input(string input) =>
+        Assert.Equal("invalid_workspace_request", Assert.Throws<OperationException>(() =>
+            EngineeringCli.ReadPinnedRequest(new StringReader(input))).Code);
+
+    [Fact]
+    public void Owned_request_transport_is_bounded_before_decoding() =>
+        Assert.Equal("invalid_workspace_request", Assert.Throws<OperationException>(() =>
+            EngineeringCli.ReadPinnedRequest(new StringReader(new string('A', 3 * 1024 * 1024)))).Code);
 
     [Fact]
     public void Saved_file_defaults_and_explicit_native_deadlines_are_distinct()

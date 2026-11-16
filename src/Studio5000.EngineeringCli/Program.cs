@@ -14,7 +14,7 @@ internal sealed record CliRequest(string Operation, string Input, int TimeoutSec
 
 internal static class EngineeringCli
 {
-    internal const string Version = "2.5.1";
+    internal const string Version = "2.5.2";
     internal const string JobEnvironment = "ROCKWELL_ENGINEERING_OWNED_JOB";
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { MaxDepth = 128 };
     internal static readonly JsonSerializerOptions StrictJson = new(Json)
@@ -149,19 +149,13 @@ internal static class EngineeringCli
             var receipt = Path.Combine(job, "result.json");
             WriteNew(Path.Combine(job, "intent.json"), new { jobId = id, request.Operation, request.Input,
                 request.TimeoutSeconds, createdUtc = DateTimeOffset.UtcNow });
-            var workerInput = request.Input;
             if (request.PinnedRequest is { } pinned)
-            {
-                workerInput = Path.Combine(job, "request.json");
-                using var snapshot = new FileStream(workerInput, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-                snapshot.Write(pinned);
-                snapshot.Flush(true);
-            }
+                WriteNew(Path.Combine(job, "request-fingerprint.json"), L5xSummary.Fingerprint(request.Input, pinned));
             var start = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("The apphost path is unavailable."))
             { UseShellExecute = false, WorkingDirectory = job };
-            foreach (var argument in new[] { "--owned-worker", request.Operation, workerInput, request.TimeoutSeconds.ToString(CultureInfo.InvariantCulture) }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "--owned-worker", request.Operation, request.Input, request.TimeoutSeconds.ToString(CultureInfo.InvariantCulture) }) start.ArgumentList.Add(argument);
             start.Environment[JobEnvironment] = job;
-            var worker = OwnedCommand.Run(job, start, null, stop.Token);
+            var worker = OwnedCommand.Run(job, start, request.PinnedRequest is { } bytes ? Convert.ToBase64String(bytes) : null, stop.Token);
             WorkerReply? reply = null;
             if (worker.ExitCode is 0 or 1 && worker.Output.Length != 0)
                 try { reply = JsonSerializer.Deserialize<WorkerReply>(worker.Output, Json); }
@@ -221,7 +215,7 @@ internal static class EngineeringCli
                 "l5x-apply" => L5xWorkflow.Apply(job, input),
                 "sdk-read-export-plan" => SdkReadExport.Plan(input),
                 "sdk-offline" or "sdk-read-export" => NativePilot.Run(job, input, operation == "sdk-read-export"),
-                "run" => WorkspaceRun.ExecuteAsync(job, input, timeoutSeconds).GetAwaiter().GetResult(),
+                "run" => WorkspaceRun.ExecuteAsync(job, input, timeoutSeconds, ReadPinnedRequest(Console.In)).GetAwaiter().GetResult(),
                 _ => throw new OperationException("unknown_operation", "Unsupported worker operation.")
             };
             Print(new WorkerReply(JsonSerializer.SerializeToElement(result, Json), null));
@@ -235,6 +229,25 @@ internal static class EngineeringCli
         using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
         JsonSerializer.Serialize(file, value, Json);
         file.Flush(true);
+    }
+
+    internal static byte[] ReadPinnedRequest(TextReader reader)
+    {
+        const int maximumBytes = 2 * 1024 * 1024, maximumEncoded = (maximumBytes + 2) / 3 * 4;
+        var encoded = new StringBuilder();
+        var buffer = new char[4096];
+        while (reader.Read(buffer, 0, buffer.Length) is var count && count != 0)
+        {
+            if (encoded.Length + count > maximumEncoded)
+                throw new OperationException("invalid_workspace_request", "The owned workspace request exceeds its limit.");
+            encoded.Append(buffer, 0, count);
+        }
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(encoded.ToString()); }
+        catch (FormatException) { throw new OperationException("invalid_workspace_request", "The owned workspace request is incomplete."); }
+        if (bytes.Length is < 1 or > maximumBytes)
+            throw new OperationException("invalid_workspace_request", "The owned workspace request has an invalid length.");
+        return bytes;
     }
 
     private static CliProblem Problem(Exception error) => new(error is OperationException op ? op.Code : error switch

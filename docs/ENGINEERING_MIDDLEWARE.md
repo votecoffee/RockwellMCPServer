@@ -1,9 +1,9 @@
 # On-demand Rockwell engineering
 
-Rockwell Engineering CLI 2.5.1 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
+Rockwell Engineering CLI 2.5.2 runs with the .NET 8 runtime on Windows. It starts an owned worker for each engineering request and calls the same project handlers used by the desktop service. Publish from this checkout with the .NET 8 SDK.
 
 ~~~powershell
-$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.5.1'
+$deploy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RockwellEngineering\middleware\stage-2.5.2'
 .\scripts\Publish-EngineeringMiddleware.ps1 -Destination $deploy
 $cli = Join-Path $deploy 'cli\Rockwell.EngineeringCli.exe'
 $l5x = (Resolve-Path -LiteralPath '.\examples\Demo.L5X').Path
@@ -19,7 +19,7 @@ An operation takes an absolute input path or request path. Job stdout is a singl
 
 Independent jobs use distinct working directories and receipts. Help, operations, operation-help and sdk-catalog start no workers. Windows assigns owned children to a private job during suspended creation. The CLI checks process cleanup before returning. A deadline or cancellation may be followed by a brief cleanup interval. File apply uses exclusive publication of a new output. A native hold or interrupted step may require review even when process cleanup is confirmed.
 
-Saved-file commands default to 30 seconds. A workspace `run` with `allowNative: true`, and the legacy native pilot commands, default to 300 seconds. Native-enabled workspace runs accept an explicit deadline of 60..300 seconds and give each SDK worker at most the command deadline minus 30 seconds for cleanup. The outer deadline still covers the entire batch, so several native steps share one bounded invocation. The exact workspace request bytes are pinned before dispatch. The CLI waits for SDK completion; SDK jobs do not survive the owning command as detached background work.
+Saved-file commands default to 30 seconds. A workspace `run` with `allowNative: true`, and the legacy native pilot commands, default to 300 seconds. Native-enabled workspace runs accept an explicit deadline of 60..300 seconds and give each SDK worker at most the command deadline minus 30 seconds for cleanup. The outer deadline still covers the entire batch, so several native steps share one bounded invocation. The exact workspace request bytes are pinned in memory and passed over stdin; only their path, length and SHA-256 are retained. SDK password arguments are not copied into job receipts or snapshot files. The CLI waits for SDK completion; SDK jobs do not survive the owning command as detached background work.
 
 Before waiting, the CLI retains `sdk-<id>.json` with the SDK job record path, source hash and controller-effect classification. It records terminal observation separately. The outer result and receipt include `recovery.sdkJobReferences` even after a deadline or cancellation. These references locate evidence; they do not establish successful export or native close. Never resubmit automatically after an interrupted dispatch.
 

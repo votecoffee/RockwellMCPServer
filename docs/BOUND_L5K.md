@@ -62,7 +62,7 @@ Invoke the native request with an explicit bounded deadline:
 & $cli run --request 'C:\Reviews\native-export.json' --timeout-seconds 300
 ```
 
-CLI 2.5.1 also defaults native-enabled workspace runs to 300 seconds. The SDK worker receives a 270-second limit with the remaining 30 seconds reserved for cleanup. This is a bounded, owned invocation, not a durable background service. Retain the outer job ID/receipt, SDK job ID, pinned source hash, SDK assembly and output artifacts. Omit controller targets entirely. The paired profile rejects communications paths and controller calls, and requires the native session to remain Offline.
+CLI 2.5.2 also defaults native-enabled workspace runs to 300 seconds. The SDK worker receives a 270-second limit with the remaining 30 seconds reserved for cleanup. This is a bounded, owned invocation, not a durable background service. Retain the outer job ID/receipt, SDK job ID, pinned source hash, SDK assembly and output artifacts. Omit controller targets entirely. The paired profile rejects communications paths and controller calls, and requires the native session to remain Offline.
 
 On success, inspect the completed SDK job and use `studio_save_artifact` to export its detailed L5X to a new absolute path. Preserve the ACD input hash and L5X output hash as distinct provenance. For a GM same-snapshot binding, continue with preview/record below and select the native L5X hash.
 
