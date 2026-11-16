@@ -11,7 +11,9 @@ public sealed class ExtensionCatalogTests
     {
         IWorkspaceExtension[] modules = [new LogixExtension(), new FactoryTalkExtension(), new ViewDesignerExtension(), new WatchesExtension()];
         var operations = modules.SelectMany(x => x.Describe()).ToArray();
-        Assert.Equal(188, operations.Length); Assert.Equal(188, operations.Select(o => o.Name).Distinct().Count());
+        Assert.Equal(191, operations.Length); Assert.Equal(191, operations.Select(o => o.Name).Distinct().Count());
+        foreach (var name in new[] { "studio_protected_dependency_export_plan", "studio_protected_dependency_preview" }) Assert.Equal("preview", operations.Single(o => o.Name == name).Effect);
+        Assert.Equal("apply", operations.Single(o => o.Name == "studio_protected_dependency_record").Effect);
         foreach (var name in new[] { "studio_safety_io_static_profiles", "studio_safety_io_static_profile_inspect", "studio_safety_io_static_browse", "studio_safety_io_static_compare" }) Assert.Equal("read", operations.Single(o => o.Name == name).Effect);
         foreach (var name in new[] { "studio_aoi_dependency_plan", "studio_preservation_chain_review" }) Assert.Equal("preview", operations.Single(o => o.Name == name).Effect);
         Assert.Equal("read", operations.Single(o => o.Name == "studio_aoi_address_plan").Effect);

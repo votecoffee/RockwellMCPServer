@@ -12,6 +12,8 @@ public sealed class DiagnosticsForm : WorkspaceForm
     private sealed record WatchChoice(WatchStatus Status) { public override string ToString() => Status.Definition.Settings.Name + " • r" + Status.Definition.Revision + " • " + Status.State; }
     private static ActionItem A(string name, string title) => new("studio_" + name, title);
     private static readonly Workflow[] Workflows = [
+        new("Protected AOI dependency evidence", "Pin the exact full saved controller L5X. Prepare partial-export requests for named opaque roots, then run that SDK job separately under explicit offline native authorization. Review retained job/artifact hashes and full Dependencies context. Record its exact reviewed receipt and copy its ID/hash into nativeDependencyEvidence on a cleanup request containing readable AOI candidates only. All protected bytes, tags, values and configuration remain unchanged. Export ciphertext is not original identity. Missing roots retain the conservative guard; native import/build acceptance remains owner work.",
+            [A("protected_dependency_export_plan", "Prepare exact-source native export plan"), A("protected_dependency_preview", "Review retained native dependency evidence"), A("protected_dependency_record", "Issue reviewed dependency receipt"), A("unused_cleanup_preview", "Review named readable AOI removals"), A("unused_cleanup_apply", "Create byte-preserved review candidate"), A("unused_cleanup_status", "Inspect retained cleanup status")]),
         new("Safety I/O static comparison", "Read/compare exact saved module pairs using pinned installed AOP layouts for 1734-IB8S/B and 1732ES-IB16/A / IB8XOBV4/A. Select flat-bytes or packed-dint32-le explicitly. Channel parameters are compared separately from retained native envelope/signature/reserved/padding and network context. The IB8XOBV4 profile uses the AOP's shared IB8XOB8 configuration layout. No writes, auto-alignment, AOP execution, controller access or safety acceptance.",
             [A("safety_io_static_profiles", "Discover static profile layouts"), A("safety_io_static_profile_inspect", "Inspect pinned static profile files"), A("safety_io_static_browse", "Decode saved native parameters"), A("safety_io_static_compare", "Compare paired modules and retain receipt")]),
         new("AOI dependencies and fresh preservation", "Pin the reviewed reference and original fresh export. Plan explicit new standard readable RLL AOI/UDT identities, then combine the returned reference additions and edits with a separately reviewed structural scope. Existing tags, configuration and libraries stay fresh. Plan exact device address operands when needed, and compose completed structural receipts back to the original fresh export. Safety overlays remain separately authorized review-only work. No native execution.",
@@ -133,6 +135,11 @@ public sealed class DiagnosticsForm : WorkspaceForm
         var staticAfter = new SafetyIoStaticBrowseRequest(f?.Id ?? "", f?.CurrentSha256 ?? "", f?.Revision ?? 0, "", staticProfile, "", "packed-dint32-le");
         object? request = operation switch
         {
+            "studio_protected_dependency_export_plan" => new ProtectedDependencyExportPlanRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), []),
+            "studio_protected_dependency_preview" => new ProtectedDependencyPreviewRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), []),
+            "studio_protected_dependency_record" => new ProtectedDependencyRecordRequest(new(new(p?.Id ?? "", p?.CurrentSha256 ?? ""), []), ""),
+            "studio_unused_cleanup_preview" => new UnusedCleanupRequest(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, [], NativeDependencyEvidence: []),
+            "studio_unused_cleanup_apply" => new UnusedCleanupApplyRequest(new(p?.Id ?? "", p?.CurrentSha256 ?? "", p?.Revision ?? 0, [], NativeDependencyEvidence: []), "", "", ""),
             "studio_safety_io_static_profile_inspect" => staticProfile,
             "studio_safety_io_static_browse" => staticBefore,
             "studio_safety_io_static_compare" => new SafetyIoStaticCompareRequest(staticBefore, staticAfter),
@@ -184,7 +191,7 @@ public sealed class DiagnosticsForm : WorkspaceForm
         if (operation is "studio_trend_view_get" or "studio_trend_view_delete") seed["trendId"] = view?.Id ?? "";
         if (operation is "studio_version_compatibility_status" or "studio_version_compatibility_readback") seed["runId"] = "";
         if (operation == "studio_validation_receipt") { seed["receiptId"] = ""; seed["expectedSha256"] = ""; }
-        if (operation == "studio_structural_edit_status") { seed["previewReceiptId"] = ""; seed["expectedSha256"] = ""; }
+        if (operation is "studio_structural_edit_status" or "studio_unused_cleanup_status") { seed["previewReceiptId"] = ""; seed["expectedSha256"] = ""; }
         return seed;
     }
     internal async Task<string[]> ExerciseOfflineWorkflowForTestAsync()

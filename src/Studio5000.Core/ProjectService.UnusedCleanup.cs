@@ -4,16 +4,17 @@ namespace Studio5000.Core;
 
 public sealed partial class ProjectService
 {
-    private (UnusedCleanupPreview Preview, byte[] Bytes) BuildUnusedCleanup(UnusedCleanupRequest request, CancellationToken ct)
+    private async Task<(UnusedCleanupPreview Preview, byte[] Bytes)> BuildUnusedCleanupAsync(UnusedCleanupRequest request, CancellationToken ct)
     {
         var input = StructuralSource(request.ProjectId, request.ExpectedSha256, request.ExpectedRevision);
-        return UnusedCleanup.Build(input.Project, input.Bytes, request, ct);
+        var evidence = request.NativeDependencyEvidence is null ? null : await ResolveProtectedDependenciesAsync(request.NativeDependencyEvidence, input.Bytes, ct);
+        return UnusedCleanup.Build(input.Project, input.Bytes, request, ct, evidence);
     }
     public async Task<UnusedCleanupPreview> PreviewUnusedCleanupAsync(UnusedCleanupRequest request, CancellationToken ct = default)
     {
         using (await EnterWorkspaceAsync(request.ProjectId, ct))
         {
-            var preview = BuildUnusedCleanup(request, ct).Preview;
+            var preview = (await BuildUnusedCleanupAsync(request, ct)).Preview;
             var receipt = StructuralArtifact(request.ProjectId, "json", JsonSerializer.SerializeToUtf8Bytes(new UnusedCleanupReceipt("unused_cleanup_preview", 1, preview, WorkspaceIdentity.Name, WorkspaceIdentity.Version), Json));
             Audit("unused_cleanup_preview", Get(request.ProjectId), preview.Source.Sha256, preview.ResultSha256, receipt.Id);
             return preview with { PreviewReceipt = receipt };
@@ -60,7 +61,7 @@ public sealed partial class ProjectService
                 if (previous.Status == "applied" && previous.Result is { } result) { _ = Download(result.Candidate.Id); _ = Download(result.Receipt.Id); return result; }
                 throw new OperationException("unused_cleanup_indeterminate", "A previous apply has no recorded completion. Inspect retained status/artifacts; it is not replayed automatically.");
             }
-            var built = BuildUnusedCleanup(request.Preview, ct);
+            var built = await BuildUnusedCleanupAsync(request.Preview, ct);
             if (built.Preview.ReviewSha256 != retained.Preview.ReviewSha256) throw new OperationException("stale_revision", "Cleanup sources, closure or preservation changed; preview again.");
             if (!built.Preview.CanApply) throw new OperationException("unused_cleanup_blocked", "There are no dependency-closed eligible removals in this review.");
             Save(path, new UnusedCleanupApplyState("applying-indeterminate", built.Preview.ReviewSha256, null));

@@ -84,6 +84,9 @@ public static class EngineeringOperations
         add("POST", "/api/safety-io/static/browse", (ProjectService service, SafetyIoStaticBrowseRequest request, CancellationToken ct) => service.BrowseSafetyIoStaticAsync(request, ct));
         add("POST", "/api/safety-io/static/compare", (ProjectService service, SafetyIoStaticCompareRequest request, CancellationToken ct) => service.CompareSafetyIoStaticAsync(request, ct));
         add("POST", "/api/unused-cleanup/preview", (ProjectService service, UnusedCleanupRequest request, CancellationToken ct) => service.PreviewUnusedCleanupAsync(request, ct));
+        add("POST", "/api/protected-dependencies/export-plan", (ProjectService service, ProtectedDependencyExportPlanRequest request, CancellationToken ct) => service.PlanProtectedDependencyExportAsync(request, ct));
+        add("POST", "/api/protected-dependencies/preview", (ProjectService service, ProtectedDependencyPreviewRequest request, CancellationToken ct) => service.PreviewProtectedDependenciesAsync(request, ct));
+        add("POST", "/api/protected-dependencies/record", (ProjectService service, ProtectedDependencyRecordRequest request, CancellationToken ct) => service.RecordProtectedDependenciesAsync(request, ct));
         add("POST", "/api/unused-cleanup/apply", (ProjectService service, UnusedCleanupApplyRequest request, CancellationToken ct) => service.ApplyUnusedCleanupAsync(request, ct));
         add("GET", "/api/unused-cleanup/previews/{id}", (ProjectService service, string id, string expectedSha256, CancellationToken ct) => service.UnusedCleanupStatusAsync(id, expectedSha256, ct));
         add("POST", "/api/structural-edits/apply", (ProjectService service, StructuralApplyRequest request, CancellationToken ct) => service.ApplyStructuralEditsAsync(request, ct));

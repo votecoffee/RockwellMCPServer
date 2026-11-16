@@ -9,13 +9,16 @@ public sealed record UnusedCleanupSelection(string Kind, string Name, string? Pr
 public sealed record UnusedCleanupKeep(UnusedCleanupSelection Selection, string Category, string Reason);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UnusedCleanupRequest(string ProjectId, string ExpectedSha256, int ExpectedRevision,
-    UnusedCleanupSelection[] Candidates, UnusedCleanupKeep[]? Retain = null);
+    UnusedCleanupSelection[] Candidates, UnusedCleanupKeep[]? Retain = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProtectedDependencyEvidenceRef[]? NativeDependencyEvidence = null);
 public sealed record UnusedCleanupDeclaration(string Key, UnusedCleanupSelection Selection, string XPath, string ElementSha256);
 public sealed record UnusedCleanupRetention(UnusedCleanupDeclaration Declaration, string Reason, string SourceXPath, string? RequiredBy = null);
 public sealed record UnusedCleanupDependency(string From, string To, string Kind, string SourceXPath);
 public sealed record UnusedCleanupPreservation(int RetainedDeclarations, string RetainedDeclarationSetSha256, bool UnselectedBytesPreserved);
 public sealed record UnusedCleanupCoverage(int ReadableUnits, int LexicalUnresolvedUnits, int ProtectedAoiRoots,
-    int OtherOpaqueRoots, int UnsupportedOrMissingUnits, bool ReadableLexicalCoverageComplete, bool HiddenOrUnsupportedSourcePresent);
+    int OtherOpaqueRoots, int UnsupportedOrMissingUnits, bool ReadableLexicalCoverageComplete, bool HiddenOrUnsupportedSourcePresent,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? NativeDependencyRootsCovered = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ProtectedAoiRootsUncovered = null);
 public sealed record UnusedCleanupPreview(UnusedCleanupRequest Request, ComparisonSnapshot Source, bool CanApply,
     string? ResultSha256, string ReviewSha256, UnusedCleanupDeclaration[] Removals, UnusedCleanupRetention[] Retentions,
     UnusedCleanupDependency[] Dependencies, string[] Diagnostics, bool Partial, UnusedCleanupPreservation Preservation,
@@ -52,7 +55,8 @@ internal static class UnusedCleanup
         ProjectService.Hash(JsonSerializer.SerializeToUtf8Bytes(declarations.Where(p => !removed.Contains(p.Key)).OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
             .Select(p => new { key = p.Key, sha256 = source.Fingerprint(p.Value) }).ToArray(), ProjectService.Json));
 
-    internal static (UnusedCleanupPreview Preview, byte[] Bytes) Build(ProjectInfo project, byte[] bytes, UnusedCleanupRequest request, CancellationToken ct)
+    internal static (UnusedCleanupPreview Preview, byte[] Bytes) Build(ProjectInfo project, byte[] bytes, UnusedCleanupRequest request, CancellationToken ct,
+        ResolvedProtectedDependency[]? nativeEvidence = null)
     {
         var selections = request.Candidates;
         var keeps = request.Retain ?? [];
@@ -74,6 +78,9 @@ internal static class UnusedCleanup
             identities.Add(node, Key(identity));
         }
         var nodes = selections.ToDictionary(Key, s => all.GetValueOrDefault(Key(s)) ?? throw new OperationException("unused_cleanup_missing", "A selected exact declaration is absent: " + Key(s)), StringComparer.OrdinalIgnoreCase);
+        if (request.NativeDependencyEvidence is not null && (nativeEvidence is null || selections.Any(s => s.Kind != "aoi" ||
+            nodes[Key(s)].Name != "AddOnInstructionDefinition" || ProtectedDependencyPolicy.Protected(nodes[Key(s)]))))
+            throw ProtectedDependencyPolicy.Error("Native dependency evidence is limited to explicitly named readable AOI removal candidates. Tags, UDTs and protected AOIs cannot be removed by this route.");
         var declarations = selections.ToDictionary(Key, s => new UnusedCleanupDeclaration(Key(s), s, XmlProjects.PathOf(nodes[Key(s)]), source.Fingerprint(nodes[Key(s)])), StringComparer.OrdinalIgnoreCase);
         var byName = selections.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(Key).ToArray(), StringComparer.OrdinalIgnoreCase);
         var selectedTypes = selections.Where(s => s.Kind is "udt" or "aoi").GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(Key).ToArray(), StringComparer.OrdinalIgnoreCase);
@@ -84,6 +91,7 @@ internal static class UnusedCleanup
         var retained = new Dictionary<string, UnusedCleanupRetention>(StringComparer.OrdinalIgnoreCase);
         var diagnostics = new List<string>(); var partial = false; long characters = 0;
         var readableUnits = 0; var lexicalUnresolvedUnits = 0; var protectedAoiRoots = 0; var otherOpaqueRoots = 0; var unsupportedUnits = 0;
+        var nativeRoots = (nativeEvidence ?? []).ToDictionary(r => r.AoiName, StringComparer.OrdinalIgnoreCase); var coveredRoots = 0;
         string Owner(XElement element) => element.AncestorsAndSelf().Select(e => identities.GetValueOrDefault(e)).FirstOrDefault(k => k is not null) is { } key && nodes.ContainsKey(key) ? key : Root;
         void Edge(string owner, string target, string kind, Func<string> location)
         {
@@ -189,8 +197,19 @@ internal static class UnusedCleanup
         // parameters-only EncodedData element can hide LocalTags, nested UDTs
         // and AOI calls; never infer complete closure from its visible attributes.
         foreach (var opaque in controller.Descendants("EncodedData"))
-            Unknown(Owner(opaque), XmlProjects.PathOf(opaque), Same((string?)opaque.Attribute("EncodedType"), "AddOnInstructionDefinition")
+        {
+            if (Same((string?)opaque.Attribute("EncodedType"), "AddOnInstructionDefinition") &&
+                opaque.Parent?.Name == "AddOnInstructionDefinitions" && nativeRoots.TryGetValue(Name(opaque), out var proof) &&
+                source.Fingerprint(opaque) == proof.SourceElementSha256)
+            {
+                protectedAoiRoots++; coveredRoots++; partial = true; // Only the library closure is established; private tag/runtime bindings remain unknown.
+                foreach (var dependency in proof.Dependencies.Where(d => d.Kind == "aoi"))
+                    if (selectedAois.TryGetValue(dependency.Name, out var key)) Edge(Owner(opaque), key, "native-protected-aoi-dependency", () => "receipt-sha256:" + proof.ReceiptSha256);
+                if (diagnostics.Count < 50) diagnostics.Add("native-protected-aoi-library-evidence: " + XmlProjects.PathOf(opaque) + "; hidden tag/runtime bindings remain unproved");
+            }
+            else Unknown(Owner(opaque), XmlProjects.PathOf(opaque), Same((string?)opaque.Attribute("EncodedType"), "AddOnInstructionDefinition")
                 ? "protected-aoi-hidden-dependencies" : "opaque-source");
+        }
         foreach (var configuration in controller.Descendants().Where(e => e.Name.LocalName is "MessageParameters" or "ProduceInfo" or "ConsumeInfo" or "Dependency"))
         {
             foreach (var attribute in configuration.Attributes()) Mentions(attribute.Value, Owner(configuration), () => XmlProjects.PathOf(configuration) + "/@" + attribute.Name.LocalName, "native-configuration-mention");
@@ -219,7 +238,8 @@ internal static class UnusedCleanup
         var report = new UnusedCleanupPreview(request, new(project.Id, project.Name, project.Revision, project.CurrentSha256), removals.Length > 0,
             removals.Length > 0 ? ProjectService.Hash(result) : null, "", removals, retained.Values.ToArray(), edges.Values.ToArray(), diagnostics.ToArray(), partial,
             new(remaining.Count, before, true), Boundary, Coverage: new(readableUnits, lexicalUnresolvedUnits, protectedAoiRoots, otherOpaqueRoots, unsupportedUnits,
-                lexicalUnresolvedUnits == 0, protectedAoiRoots + otherOpaqueRoots + unsupportedUnits > 0));
+                lexicalUnresolvedUnits == 0, protectedAoiRoots + otherOpaqueRoots + unsupportedUnits > 0,
+                request.NativeDependencyEvidence is null ? null : coveredRoots, request.NativeDependencyEvidence is null ? null : protectedAoiRoots - coveredRoots));
         var hash = ProjectService.Hash(JsonSerializer.SerializeToUtf8Bytes(report, ProjectService.Json));
         report = report with { ReviewSha256 = hash };
         if (JsonSerializer.SerializeToUtf8Bytes(report, ProjectService.Json).Length > 4 * 1024 * 1024) throw new OperationException("unused_cleanup_limit", "Review exceeds 4 MiB; narrow the candidate set.");

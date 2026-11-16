@@ -163,7 +163,7 @@ internal static partial class SdkRunner
             }
         }
         lifecycle?.Complete(result.Status == "succeeded", result.Status == "succeeded", true);
-        if (request.BoundL5k) result = result with { SdkAssembly = typeof(LogixProject).Assembly.FullName };
+        result = result with { SdkAssembly = typeof(LogixProject).Assembly.FullName };
         await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(result, Json));
         return 0; // Domain failures are represented by the result, not a lost process response.
     }
