@@ -57,6 +57,8 @@ CLI 2.8.1 also recognizes explicit native built-in context that a full `No Produ
 
 After updating from 2.8.0, re-preview the same retained successful SDK job and artifacts, then review/record the new hash. This saved-file correction needs no new SDK dispatch. Previously issued receipts with no intrinsic rows retain their original hashes and can still be revalidated.
 
+From CLI 2.8.2, new source snapshots, dependency receipts and cleanup artifacts describe their own workflow in `validation`. They no longer inherit the generic structural component-batch description. Existing immutable artifacts retain their original text and hashes; this metadata correction does not change their evidence or imply additional native acceptance.
+
 `ForceProtectedEncoding` can produce different ciphertext. The receipt records original protected-element hashes and native exported-element hashes **separately**; it never compares these as equivalent payloads. Native dependency authority comes from the exact pinned input/job/export relationship, not metadata similarity. Readable source becoming opaque in an export is insufficient for a readable-definition contract.
 
 Review `canIssue`, every dependency, finding and provenance hash. Issue the receipt with `studio_protected_dependency_record` using the complete unchanged preview request in `preview` and the exact `reviewSha256` in `expectedReviewSha256`. This rechecks all evidence and returns `receipt` and `sourceSnapshot` artifacts. Both are exportable with `studio_save_artifact`; cleanup consumes the retained workspace receipt ID/hash.

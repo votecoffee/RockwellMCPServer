@@ -33,6 +33,7 @@ internal sealed record ResolvedProtectedDependency(string AoiName, string Source
 internal static class ProtectedDependencyPolicy
 {
     internal const string IntrinsicRegistry = "logix-builtins-v1";
+    internal const string SourceSnapshotBoundary = "Immutable full saved-controller L5X snapshot for protected-AOI dependency review. Exact source bytes and SHA-256 are pinned. Native dependency evidence and native acceptance are separate.";
     internal const string Boundary = "Reviewed native dependency context for explicitly bound protected AOIs. Requires a completed offline SDK partial-export job, exact retained input L5X or same-job full ACD readback, Dependencies/ForceProtectedEncoding context and matching source type/library contracts. Export ciphertext may be re-encoded and is never compared as identity. Reuse binds original source opaque bytes and all manifested contracts. Library closure only: hidden tag/external/runtime bindings remain unproved. No native dispatch, decryption, general override or safety/deployment acceptance.";
     internal static XElement Controller(XDocument doc) => doc.Root?.Element("Controller") ?? throw Error("A named Controller is required.");
     internal static Dictionary<string, XElement> Types(XDocument doc) => Index(Controller(doc).Elements("DataTypes").Elements("DataType"));
@@ -72,7 +73,7 @@ public sealed partial class ProjectService
                 calls.Add(new("PartialExportToXmlFileAsync", new() { ["xPath"] = JsonSerializer.SerializeToElement("Controller/AddOnInstructionDefinitions/AddOnInstructionDefinition[@Name='" + name + "']"),
                     ["filePath"] = JsonSerializer.SerializeToElement("dependency-" + (calls.Count - 1).ToString("D2", System.Globalization.CultureInfo.InvariantCulture) + ".l5x") }));
             }
-            var snapshot = StructuralArtifact(input.Project.Id, "l5x", input.Bytes);
+            var snapshot = StructuralArtifact(input.Project.Id, "l5x", input.Bytes, ProtectedDependencyPolicy.SourceSnapshotBoundary);
             var sdk = new SdkRunRequest(calls.ToArray(), ExpectedSha256: snapshot.Sha256, SourceArtifactId: snapshot.Id);
             SdkCatalog.ValidateCalls(sdk.Calls); NativeExecutionPolicy.ValidateCalls(NativeExecutionPolicy.LocalProject, sdk.Calls);
             return new(new(input.Project.Id, input.Project.Name, input.Project.Revision, input.Project.CurrentSha256), snapshot, sdk, ProtectedDependencyPolicy.Boundary);
@@ -194,9 +195,9 @@ public sealed partial class ProjectService
             var built = await BuildProtectedDependencyEvidenceAsync(request.Preview, ct);
             if (!built.Review.ReviewSha256.Equals(request.ExpectedReviewSha256, StringComparison.OrdinalIgnoreCase)) throw new OperationException("stale_revision", "Native source/export/job evidence changed; review again.");
             if (!built.Review.CanIssue) throw ProtectedDependencyPolicy.Error("Resolve all source/context findings before issuing a dependency receipt.");
-            var source = StructuralArtifact(built.Review.Source.Id, "l5x", built.Source);
+            var source = StructuralArtifact(built.Review.Source.Id, "l5x", built.Source, ProtectedDependencyPolicy.SourceSnapshotBoundary);
             var document = new ProtectedDependencyDocument(1, "protected_dependency_evidence", WorkspaceIdentity.Name, WorkspaceIdentity.Version, request.Preview, built.Review, source);
-            var receipt = StructuralArtifact(built.Review.Source.Id, "json", JsonSerializer.SerializeToUtf8Bytes(document, Json));
+            var receipt = StructuralArtifact(built.Review.Source.Id, "json", JsonSerializer.SerializeToUtf8Bytes(document, Json), ProtectedDependencyPolicy.Boundary);
             Save(Path.Combine(ArtifactDir(receipt.Id), "protected-evidence-issued.json"), new ProtectedDependencyIssued(receipt.Sha256, built.Review.ReviewSha256));
             return new(receipt, source, built.Review);
         }

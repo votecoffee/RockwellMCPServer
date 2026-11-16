@@ -75,8 +75,8 @@ public sealed partial class ProjectService
         }
         return results.ToArray();
     }
-    private Artifact StructuralArtifact(string projectId, string format, byte[] bytes)
-    { var id = Guid.NewGuid().ToString("N"); var dir = ArtifactDir(id); Directory.CreateDirectory(dir); AtomicBytes(Path.Combine(dir, "project." + format), bytes); var artifact = new Artifact(id, projectId, format, Hash(bytes), bytes.Length, StructuralEditing.Boundary); Save(Path.Combine(dir, "artifact.json"), artifact); return artifact; }
+    private Artifact StructuralArtifact(string projectId, string format, byte[] bytes, string? validation = null)
+    { var id = Guid.NewGuid().ToString("N"); var dir = ArtifactDir(id); Directory.CreateDirectory(dir); AtomicBytes(Path.Combine(dir, "project." + format), bytes); var artifact = new Artifact(id, projectId, format, Hash(bytes), bytes.Length, validation ?? StructuralEditing.Boundary); Save(Path.Combine(dir, "artifact.json"), artifact); return artifact; }
     public async Task<StructuralEditPreview> PreviewStructuralEditsAsync(StructuralEditRequest request, CancellationToken ct = default)
     {
         using (await EnterWorkspaceAsync(request.ProjectId, ct))
