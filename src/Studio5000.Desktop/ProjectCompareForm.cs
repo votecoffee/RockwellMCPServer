@@ -11,6 +11,10 @@ internal sealed record ReviewProjectChoice(ProjectInfo Project)
 
 public sealed class ProjectCompareForm : WorkspaceForm
 {
+    private sealed record ViewChoice(string? Mode, string Label) { public override string ToString() => Label; }
+    private readonly ComboBox routineView = new() { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList };
+    private string? SelectedView => (routineView.SelectedItem as ViewChoice)?.Mode;
+    private void SelectView(string? mode) => routineView.SelectedItem = routineView.Items.Cast<ViewChoice>().First(v => v.Mode == (mode == "exact" ? null : mode));
     private readonly ServiceClient client;
     private readonly ProjectInfo? initial;
     private readonly ComboBox left = new() { Width = 330, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -40,11 +44,12 @@ public sealed class ProjectCompareForm : WorkspaceForm
         this.client = client; this.initial = initial; ladder = new(client);
         Text = "Logix project comparison"; Size = new(1380, 880); MinimumSize = new(1100, 700); Font = new("Segoe UI", 10);
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 180, Padding = new(8), AutoScroll = true };
+        routineView.Items.AddRange([new ViewChoice(null, "Exact routine annotations"), new ViewChoice("annotation-blank-lines", "Ignore blank annotation lines"), new ViewChoice("instructions", "Ignore routine annotations")]); routineView.SelectedIndex = 0;
         top.Controls.Add(new Label { Text = "Left", AutoSize = true, Padding = new(0, 7, 0, 0) }); top.Controls.Add(left);
         top.Controls.Add(new Label { Text = "Right", AutoSize = true, Padding = new(0, 7, 0, 0) }); top.Controls.Add(right);
         Button(top, "Refresh snapshots", RefreshAsync); Button(top, "Compare", CompareAsync);
         Button(top, "Open left…", () => OpenSnapshotAsync(left)); Button(top, "Open right…", () => OpenSnapshotAsync(right));
-        top.SetFlowBreak(top.Controls[^1], true); top.Controls.Add(query); top.Controls.Add(numbers);
+        top.SetFlowBreak(top.Controls[^1], true); top.Controls.Add(query); top.Controls.Add(numbers); top.Controls.Add(routineView);
         Button(top, "Previous", () => PageAsync(-1)); Button(top, "Next", () => PageAsync(1));
         top.Controls.Add(locate); locate.Click += async (_, _) => await Run(LocateAsync);
         top.SetFlowBreak(locate, true); top.Controls.Add(sessions); top.Controls.Add(sessionName);
@@ -54,6 +59,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
         Button(top, "Review recovery", PreviewRecoveryAsync); Button(top, "Save reviewed recovery", ApplyRecoveryAsync);
         top.Controls.Add(new Label { Text = "Recovery uses selected snapshots and clears the previous ladder bookmark.", AutoSize = true, Padding = new(0, 7, 0, 0) });
         query.TextChanged += (_, _) => recovery = null; numbers.CheckedChanged += (_, _) => recovery = null;
+        routineView.SelectionChangeCommitted += (_, _) => ClearSelection();
         sessions.SelectionChangeCommitted += (_, _) => { if (sessions.SelectedItem is SavedReviewChoice s) sessionName.Text = s.Summary.Name; };
         changes.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Change", HeaderText = "Change", Width = 100 });
         changes.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Kind", HeaderText = "Component", Width = 150 });
@@ -127,7 +133,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
         if (left.SelectedItem is not ReviewProjectChoice a || right.SelectedItem is not ReviewProjectChoice b)
             throw new InvalidOperationException("Register/select two Logix snapshots first.");
         return new(a.Project.Id, a.Project.CurrentSha256, b.Project.Id, b.Project.CurrentSha256,
-            string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim(), IncludeRungNumbers: numbers.Checked);
+            string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim(), IncludeRungNumbers: numbers.Checked, RoutineView: SelectedView);
     }
     private async Task PageAsync(int direction)
     {
@@ -141,6 +147,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
         report = value; changes.DataSource = value.Differences;
         status.Text = $"{value.TotalChanges} changes: +{value.Added} / −{value.Removed} / ~{value.Modified}. Showing {value.Offset + 1}–{value.Offset + value.Differences.Length} of {value.FilteredChanges} matches. Structural XML only; snippets may be truncated.";
         if (value.FilteredChanges == 0) status.Text = $"{value.TotalChanges} total changes; no differences match this filter. Structural comparison only.";
+        if (value.View is not null) status.Text += " Routine view: " + value.View.Mode + ". Exact source hashes retained.";
         SelectDifference();
     }
     private void SelectDifference()
@@ -166,7 +173,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
     private async Task SaveSessionAsync(bool update)
     {
         if (request is null || report is null) throw new InvalidOperationException("Compare current snapshots before saving a session.");
-        if (request.Query != (string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim()) || request.IncludeRungNumbers != numbers.Checked)
+        if (request.Query != (string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim()) || request.IncludeRungNumbers != numbers.Checked || (request.RoutineView ?? "exact") != (SelectedView ?? "exact"))
             throw new InvalidOperationException("Select Compare to include the changed comparison settings before saving.");
         var existing = update ? (sessions.SelectedItem as SavedReviewChoice)?.Summary ?? throw new InvalidOperationException("Select a saved session to update.") : null;
         if (existing is not null && loadedSession?.Id != existing.Id) throw new InvalidOperationException("Load the selected session before updating it.");
@@ -183,7 +190,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
         var c = view.Session.Comparison;
         left.SelectedItem = left.Items.Cast<ReviewProjectChoice>().FirstOrDefault(p => p.Project.Id == c.LeftProjectId);
         right.SelectedItem = right.Items.Cast<ReviewProjectChoice>().FirstOrDefault(p => p.Project.Id == c.RightProjectId);
-        query.Text = c.Query ?? ""; numbers.Checked = c.IncludeRungNumbers;
+        query.Text = c.Query ?? ""; numbers.Checked = c.IncludeRungNumbers; SelectView(c.RoutineView);
         if (!view.CanResume) { status.Text = string.Join(" ", view.Issues); return; }
         request = c; await LoadAsync(); await ladder.RestoreAsync(c, view.Session.Bookmark); previews.SelectedIndex = 1;
         if (view.Session.Bookmark is { } bookmark && ladder.DisplayedReport?.Offset != bookmark.RungOffset)
@@ -225,7 +232,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
     {
         if (request is null || report is null) throw new InvalidOperationException("Compare current snapshots before exporting a report.");
         var selected = SelectedComparison();
-        if (selected.LeftProjectId != request.LeftProjectId || selected.RightProjectId != request.RightProjectId || selected.Query != request.Query || selected.IncludeRungNumbers != request.IncludeRungNumbers ||
+        if (selected.LeftProjectId != request.LeftProjectId || selected.RightProjectId != request.RightProjectId || selected.Query != request.Query || selected.IncludeRungNumbers != request.IncludeRungNumbers || (selected.RoutineView ?? "exact") != (request.RoutineView ?? "exact") ||
             !selected.LeftSha256.Equals(request.LeftSha256, StringComparison.OrdinalIgnoreCase) || !selected.RightSha256.Equals(request.RightSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Selections or filters changed; compare again before exporting.");
         return request;
@@ -254,7 +261,7 @@ public sealed class ProjectCompareForm : WorkspaceForm
         await RefreshAsync(); loadedSession = null;
         left.SelectedItem = left.Items.Cast<ReviewProjectChoice>().FirstOrDefault(p => p.Project.Id == entry.Left.Id);
         right.SelectedItem = right.Items.Cast<ReviewProjectChoice>().FirstOrDefault(p => p.Project.Id == entry.Right.Id);
-        query.Text = entry.Query ?? ""; numbers.Checked = entry.IncludeRungNumbers;
+        query.Text = entry.Query ?? ""; numbers.Checked = entry.IncludeRungNumbers; SelectView(entry.View?.Mode);
         if (left.SelectedItem is not ReviewProjectChoice a || right.SelectedItem is not ReviewProjectChoice b ||
             !a.Project.CurrentSha256.Equals(entry.Left.Sha256, StringComparison.OrdinalIgnoreCase) || !b.Project.CurrentSha256.Equals(entry.Right.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Recorded snapshots have changed or are unavailable. Save the retained report copy to inspect its original comparison; select current snapshots explicitly for a new comparison.");

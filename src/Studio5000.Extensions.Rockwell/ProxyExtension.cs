@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Studio5000.Client;
@@ -71,6 +72,13 @@ public abstract class ProxyExtension : IWorkspaceExtension
                 var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name); var schema = Schema(property.PropertyType, new(ancestors));
                 var optional = nullability.Create(property).ReadState == NullabilityState.Nullable || Nullable.GetUnderlyingType(property.PropertyType) is not null;
                 if (optional && schema["type"] is JsonValue kind) schema["type"] = new JsonArray(kind.GetValue<string>(), "null");
+                if (property.GetCustomAttribute<RangeAttribute>() is { } range)
+                { schema["minimum"] = Convert.ToDecimal(range.Minimum, System.Globalization.CultureInfo.InvariantCulture); schema["maximum"] = Convert.ToDecimal(range.Maximum, System.Globalization.CultureInfo.InvariantCulture); }
+                if (property.GetCustomAttribute<AllowedValuesAttribute>() is { } allowed)
+                {
+                    var values = allowed.Values.Select(v => JsonSerializer.SerializeToNode(v)).ToArray();
+                    schema["enum"] = new JsonArray(optional ? [.. values, null] : values);
+                }
                 properties[name] = schema;
                 var parameter = constructor?.GetParameters().FirstOrDefault(p => p.Name!.Equals(property.Name, StringComparison.OrdinalIgnoreCase));
                 if (!optional && parameter?.HasDefaultValue != true) required.Add(name);

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using System.Text.Json.Serialization;
 
 namespace Studio5000.Core;
 
@@ -11,10 +12,12 @@ public sealed record ComparisonReviewDrawing(string Status, string[] Diagnostics
 public sealed record ComparisonReviewChange(ProjectDifference Difference, ComparisonReviewDrawing? LeftDrawing, ComparisonReviewDrawing? RightDrawing);
 public sealed record ComparisonReviewDocument(int SchemaVersion, string ApplicationVersion, DateTimeOffset CreatedAt,
     ComparisonSnapshot Left, ComparisonSnapshot Right, string? Query, bool IncludeRungNumbers, bool IncludeXml, bool IncludeLadder,
-    int TotalChanges, int Added, int Removed, int Modified, ComparisonReviewChange[] Changes, string Boundary);
+    int TotalChanges, int Added, int Removed, int Modified, ComparisonReviewChange[] Changes, string Boundary,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ComparisonViewInfo? View = null);
 public sealed record ComparisonReviewEntry(string Id, DateTimeOffset CreatedAt, string Format, string ArtifactId, string Sha256, long Bytes,
     ComparisonSnapshot Left, ComparisonSnapshot Right, string? Query, bool IncludeRungNumbers, bool IncludeXml, bool IncludeLadder, int TotalChanges, int IncludedChanges,
-    string? CatalogSha256 = null);
+    string? CatalogSha256 = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ComparisonViewInfo? View = null);
 public sealed record ComparisonReviewPage(int Total, int Offset, int Limit, ComparisonReviewEntry[] Reviews);
 public sealed record ComparisonReviewDeleteRequest(string ExpectedSha256);
 public sealed record ComparisonReviewExport(Artifact Artifact, ComparisonReviewEntry Review);
@@ -45,6 +48,7 @@ public static class ComparisonReviews
             .Append(". Included matches: ").Append(d.Changes.Length).Append(". Filter: <code>").Append(H(d.Query ?? "(all)")).Append("</code>.</p><p>Rung numbers: ").Append(d.IncludeRungNumbers)
             .Append(" · XML: ").Append(d.IncludeXml).Append(" · Ladder drawings: ").Append(d.IncludeLadder).Append("</p><p class=\"muted\">").Append(H(d.Boundary)).Append("</p></header>");
         var checkedLength = b.Length; var byteCount = Encoding.UTF8.GetByteCount(b.ToString());
+        if (d.View is not null) b.Append("<p>Routine view: <strong>").Append(H(d.View.Mode)).Append("</strong>. ").Append(H(d.View.Boundary)).Append("</p>");
         for (var i = 0; i < d.Changes.Length; i++)
         {
             var row = d.Changes[i]; var c = row.Difference;
@@ -106,7 +110,7 @@ public sealed partial class ProjectService
                 request.IncludeLadder && c.Kind == "Rung" ? Draw(left, a, c.LeftXPath) : null, request.IncludeLadder && c.Kind == "Rung" ? Draw(right, b, c.RightXPath) : null)).ToArray();
             static ComparisonSnapshot Snapshot(ProjectInfo p) => new(p.Id, p.Name, p.Revision, p.CurrentSha256);
             var document = new ComparisonReviewDocument(1, WorkspaceIdentity.Version, DateTimeOffset.UtcNow, Snapshot(left), Snapshot(right), comparison.Query,
-                comparison.IncludeRungNumbers, request.IncludeXml, request.IncludeLadder, report.TotalChanges, report.Added, report.Removed, report.Modified, rows, report.Boundary + " " + ComparisonReviews.Boundary);
+                comparison.IncludeRungNumbers, request.IncludeXml, request.IncludeLadder, report.TotalChanges, report.Added, report.Removed, report.Modified, rows, report.Boundary + " " + ComparisonReviews.Boundary, report.View);
             var bytes = ComparisonReviews.Bytes(document, request.Format); ct.ThrowIfCancellationRequested();
             var catalog = ComparisonAnnotations.Catalog(Hash(bytes), document.Changes);
             var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog, Json);
@@ -117,7 +121,7 @@ public sealed partial class ProjectService
             var artifact = new Artifact(id, id, request.Format, Hash(bytes), bytes.Length, ComparisonReviews.Boundary);
             Save(Path.Combine(artifactDir, "artifact.json"), artifact);
             var entry = new ComparisonReviewEntry(id, document.CreatedAt, request.Format, artifact.Id, artifact.Sha256, artifact.Bytes, document.Left, document.Right,
-                document.Query, document.IncludeRungNumbers, document.IncludeXml, document.IncludeLadder, document.TotalChanges, rows.Length, Hash(catalogBytes));
+                document.Query, document.IncludeRungNumbers, document.IncludeXml, document.IncludeLadder, document.TotalChanges, rows.Length, Hash(catalogBytes), document.View);
             ReviewWrite("comparison-reviews", id, entry); return new(artifact, entry);
         }
         finally { gate.Release(); }

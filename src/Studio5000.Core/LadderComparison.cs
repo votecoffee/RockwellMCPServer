@@ -1,15 +1,22 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using System.Text.Json.Serialization;
+using System.ComponentModel.DataAnnotations;
 
 namespace Studio5000.Core;
 
-public sealed record ComparedRoutine(string Owner, string Name, string Change, string? LeftType, string? RightType, string? LeftXPath, string? RightXPath, int LeftRungs, int RightRungs);
-public sealed record ComparedRoutinesReport(ProjectInfo Left, ProjectInfo Right, int Total, int Offset, ComparedRoutine[] Routines);
+public sealed record ComparedRoutine(string Owner, string Name, string Change, string? LeftType, string? RightType, string? LeftXPath, string? RightXPath, int LeftRungs, int RightRungs,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExactChange = null);
+public sealed record ComparedRoutinesReport(ProjectInfo Left, ProjectInfo Right, int Total, int Offset, ComparedRoutine[] Routines,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ComparisonViewInfo? View = null);
 public sealed record LadderCompareRequest(string LeftProjectId, string LeftSha256, string RightProjectId, string RightSha256,
-    string? LeftRoutineXPath, string? RightRoutineXPath, int Offset = 0, int Limit = 1, bool IncludeRungNumbers = false, bool ChangesOnly = false);
-public sealed record ComparedRung(int Position, string Change, LadderRungPreview? Left, LadderRungPreview? Right);
-public sealed record LadderComparisonReport(ProjectInfo Left, ProjectInfo Right, int Total, int Offset, ComparedRung[] Rungs, string Coverage);
-public sealed record LadderLocateRequest(ProjectCompareRequest Comparison, string? LeftXPath, string? RightXPath, bool ChangesOnly = false);
+    string? LeftRoutineXPath, string? RightRoutineXPath, [property: Range(0, 100000)] int Offset = 0, [property: Range(1, 20)] int Limit = 1, bool IncludeRungNumbers = false, bool ChangesOnly = false,
+    [property: AllowedValues("exact", "instructions", "annotation-blank-lines"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RoutineView = null, bool IncludeDrawings = true);
+public sealed record ComparedRung(int Position, string Change, LadderRungPreview? Left, LadderRungPreview? Right,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExactChange = null);
+public sealed record LadderComparisonReport(ProjectInfo Left, ProjectInfo Right, int Total, int Offset, ComparedRung[] Rungs, string Coverage,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ComparisonViewInfo? View = null);
+public sealed record LadderLocateRequest(ProjectCompareRequest Comparison, string? LeftXPath, string? RightXPath, bool ChangesOnly = false, bool IncludeDrawings = true);
 public sealed record LadderLocation(ComparedRoutine Routine, LadderComparisonReport Ladder);
 
 public static class LadderComparison
@@ -24,15 +31,17 @@ public static class LadderComparison
     }
     internal static string Owner(XElement e) => e.Ancestors("Program").FirstOrDefault() is { } p ? "Program:" + (string?)p.Attribute("Name") :
         e.Ancestors("AddOnInstructionDefinition").FirstOrDefault() is { } a ? "AOI:" + (string?)a.Attribute("Name") : "Controller";
-    internal static string Canon(XElement e, bool numbers) => ProjectComparison.Normalize(e, numbers).ToString(SaveOptions.DisableFormatting);
-    internal static ComparedRoutine Describe(XElement? a, XElement? b, bool numbers)
+    internal static string Canon(XElement e, bool numbers, string? view = null) => RoutineComparisonViews.Canon(e, numbers, view)!;
+    internal static ComparedRoutine Describe(XElement? a, XElement? b, bool numbers, string? view = null)
     {
         var e = (b ?? a)!;
-        return new(Owner(e), (string)e.Attribute("Name")!, a is null ? "added" : b is null ? "removed" : Canon(a, numbers) == Canon(b, numbers) ? "unchanged" : "modified",
+        string Change(string? mode) => a is null ? "added" : b is null ? "removed" : Canon(a, numbers, mode) == Canon(b, numbers, mode) ? "unchanged" : "modified";
+        return new(Owner(e), (string)e.Attribute("Name")!, Change(view),
             (string?)a?.Attribute("Type"), (string?)b?.Attribute("Type"), a is null ? null : XmlProjects.PathOf(a), b is null ? null : XmlProjects.PathOf(b),
-            a?.Elements("RLLContent").Elements("Rung").Count() ?? 0, b?.Elements("RLLContent").Elements("Rung").Count() ?? 0);
+            a?.Elements("RLLContent").Elements("Rung").Count() ?? 0, b?.Elements("RLLContent").Elements("Rung").Count() ?? 0,
+            RoutineComparisonViews.Info(view) is null ? null : Change(null));
     }
-    private static (int? A, int? B, string Change)[] Rows(XElement? leftRoutine, XElement? rightRoutine, bool numbers)
+    private static (int? A, int? B, string Change)[] Rows(XElement? leftRoutine, XElement? rightRoutine, bool numbers, string? view)
     {
         if (leftRoutine is null && rightRoutine is null) throw new OperationException("invalid_ladder_query", "Select at least one exact RLL routine.");
         foreach (var routine in new[] { leftRoutine, rightRoutine }.OfType<XElement>())
@@ -44,7 +53,7 @@ public static class LadderComparison
             return contents.SelectMany(c => c.Elements("Rung")).ToArray();
         }
         var a = Rungs(leftRoutine); var b = Rungs(rightRoutine);
-        var aligned = ProjectComparison.Align(a.Select(e => Canon(e, numbers)).ToArray(), b.Select(e => Canon(e, numbers)).ToArray());
+        var aligned = ProjectComparison.Align(a.Select(e => Canon(e, numbers, view)).ToArray(), b.Select(e => Canon(e, numbers, view)).ToArray());
         var rows = new List<(int? A, int? B, string Change)>(); var removed = new List<int>(); var added = new List<int>();
         void Flush()
         {
@@ -62,11 +71,12 @@ public static class LadderComparison
     public static LadderComparisonReport Compare(ProjectInfo left, XElement? leftRoutine, ProjectInfo right, XElement? rightRoutine, LadderCompareRequest request)
     {
         if (request.Offset is < 0 or > 100000 || request.Limit is < 1 or > 20) throw new OperationException("invalid_ladder_query", "Use offset 0..100000 and limit 1..20.");
-        return Build(left, leftRoutine, right, rightRoutine, request, Rows(leftRoutine, rightRoutine, request.IncludeRungNumbers));
+        _ = RoutineComparisonViews.Info(request.RoutineView);
+        return Build(left, leftRoutine, right, rightRoutine, request, Rows(leftRoutine, rightRoutine, request.IncludeRungNumbers, request.RoutineView));
     }
     internal static LadderComparisonReport Locate(ProjectInfo left, XElement? a, ProjectInfo right, XElement? b, LadderCompareRequest request, int? leftIndex, int? rightIndex)
     {
-        var rows = Rows(a, b, request.IncludeRungNumbers);
+        var rows = Rows(a, b, request.IncludeRungNumbers, request.RoutineView);
         var selected = rows.Where(r => !request.ChangesOnly || r.Change != "unchanged").ToArray();
         var offset = leftIndex is null && rightIndex is null ? 0 : Array.FindIndex(selected, r => (leftIndex is null || r.A == leftIndex) && (rightIndex is null || r.B == rightIndex));
         if (offset < 0) throw new OperationException("comparison_navigation_target", "Selected rung occurrences do not identify one aligned row in the current filter.");
@@ -74,12 +84,17 @@ public static class LadderComparison
     }
     private static LadderComparisonReport Build(ProjectInfo left, XElement? leftRoutine, ProjectInfo right, XElement? rightRoutine, LadderCompareRequest request, (int? A, int? B, string Change)[] rows)
     {
+        var view = RoutineComparisonViews.Info(request.RoutineView);
+        var a = leftRoutine?.Elements("RLLContent").Elements("Rung").ToArray() ?? []; var b = rightRoutine?.Elements("RLLContent").Elements("Rung").ToArray() ?? [];
+        string? Exact((int? A, int? B, string Change) row) => view is null ? null : row.A is null || row.B is null ? row.Change :
+            Canon(a[row.A.Value], request.IncludeRungNumbers) == Canon(b[row.B.Value], request.IncludeRungNumbers) ? "unchanged" : "modified";
         LadderRungPreview? Render(ProjectInfo info, XElement? routine, int? index) => index is null ? null :
-            LadderPreview.Build(info, routine!, new(info.CurrentSha256, XmlProjects.PathOf(routine!), index.Value, 1)).Rungs.Single();
+            LadderPreview.Build(info, routine!, new(info.CurrentSha256, XmlProjects.PathOf(routine!), index.Value, 1, request.IncludeDrawings)).Rungs.Single();
         var selected = rows.Select((r, i) => (Row: r, Position: i)).Where(r => !request.ChangesOnly || r.Row.Change != "unchanged").ToArray();
         var result = new LadderComparisonReport(left, right, selected.Length, request.Offset,
-            selected.Skip(request.Offset).Take(request.Limit).Select(r => new ComparedRung(r.Position, r.Row.Change, Render(left, leftRoutine, r.Row.A), Render(right, rightRoutine, r.Row.B))).ToArray(),
-            "Independent saved-project comparison and passive ladder geometry. Occurrence alignment preserves inserted/deleted gaps; adjacent unmatched spans pair by order. Unknown instructions retain source/diagnostics. No Studio compare, live power-flow, simulation or semantic equivalence.");
+            selected.Skip(request.Offset).Take(request.Limit).Select(r => new ComparedRung(r.Position, r.Row.Change, Render(left, leftRoutine, r.Row.A), Render(right, rightRoutine, r.Row.B), Exact(r.Row))).ToArray(),
+            (request.IncludeDrawings ? "Independent saved-project comparison and passive ladder geometry. " : "Text-only saved-rung comparison; instruction parsing and drawing generation are not performed. ") +
+            "Occurrence alignment preserves inserted/deleted gaps; adjacent unmatched spans pair by order. No Studio compare, live power-flow, simulation or semantic equivalence." + (view is null ? "" : " " + view.Boundary), view);
         if (JsonSerializer.SerializeToUtf8Bytes(result, ProjectService.Json).Length > 4 * 1024 * 1024) throw new OperationException("comparison_page_too_large", "Select fewer rungs.");
         return result;
     }
@@ -98,6 +113,7 @@ public sealed partial class ProjectService
         if (request.Offset is < 0 or > 100000 || request.Limit is < 1 or > 200 || request.Query?.Length > 256) throw new OperationException("invalid_comparison", "Use offset 0..100000, limit 1..200 and query up to 256 characters.");
         var (left, a, right, b) = ComparisonDocuments(request.LeftProjectId, request.LeftSha256, request.RightProjectId, request.RightSha256);
         ProjectComparison.ValidateScope(request);
+        var view = RoutineComparisonViews.Info(request.RoutineView);
         var pairs = LadderComparison.Routines(a, b).Where(pair =>
         {
             var node = (pair.Right ?? pair.Left)!;
@@ -107,7 +123,7 @@ public sealed partial class ProjectService
                 (string.IsNullOrEmpty(request.Query) || (owner + "/" + name).Contains(request.Query, StringComparison.OrdinalIgnoreCase));
         }).ToArray();
         return new(left, right, pairs.Length, request.Offset, pairs.Skip(request.Offset).Take(request.Limit)
-            .Select(pair => LadderComparison.Describe(pair.Left, pair.Right, request.IncludeRungNumbers)).ToArray());
+            .Select(pair => LadderComparison.Describe(pair.Left, pair.Right, request.IncludeRungNumbers, request.RoutineView)).ToArray(), view);
     }
     public LadderComparisonReport CompareLadder(LadderCompareRequest request)
     {
@@ -142,8 +158,8 @@ public sealed partial class ProjectService
         var x = Anchor(a, request.LeftXPath); var y = Anchor(b, request.RightXPath);
         var pair = LadderComparison.Routines(a, b).Single(p => x.Routine is not null ? p.Left == x.Routine : p.Right == y.Routine);
         if (x.Routine is not null && pair.Left != x.Routine || y.Routine is not null && pair.Right != y.Routine) throw new OperationException("comparison_navigation_target", "Both selected components must belong to the same matched routine pair.");
-        var routine = LadderComparison.Describe(pair.Left, pair.Right, c.IncludeRungNumbers);
-        var ladder = LadderComparison.Locate(left, pair.Left, right, pair.Right, new(c.LeftProjectId, c.LeftSha256, c.RightProjectId, c.RightSha256, routine.LeftXPath, routine.RightXPath, IncludeRungNumbers: c.IncludeRungNumbers, ChangesOnly: request.ChangesOnly), x.Index, y.Index);
+        var routine = LadderComparison.Describe(pair.Left, pair.Right, c.IncludeRungNumbers, c.RoutineView);
+        var ladder = LadderComparison.Locate(left, pair.Left, right, pair.Right, new(c.LeftProjectId, c.LeftSha256, c.RightProjectId, c.RightSha256, routine.LeftXPath, routine.RightXPath, IncludeRungNumbers: c.IncludeRungNumbers, ChangesOnly: request.ChangesOnly, RoutineView: c.RoutineView, IncludeDrawings: request.IncludeDrawings), x.Index, y.Index);
         return new(routine, ladder);
     }
 }

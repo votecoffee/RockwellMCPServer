@@ -124,7 +124,7 @@ public sealed partial class ProjectService
                 if (b.RoutineQuery?.Length > 256) throw new OperationException("invalid_review", "Routine filter exceeds 256 characters.");
                 var c = request.Comparison;
                 var ladder = CompareLadder(new(c.LeftProjectId, c.LeftSha256, c.RightProjectId, c.RightSha256, b.LeftRoutineXPath, b.RightRoutineXPath,
-                    b.RungOffset, 1, c.IncludeRungNumbers, b.ChangesOnly));
+                    b.RungOffset, 1, c.IncludeRungNumbers, b.ChangesOnly, RoutineView: c.RoutineView, IncludeDrawings: false));
                 if (b.RungOffset >= Math.Max(1, ladder.Total)) throw new OperationException("invalid_review", "Bookmark is outside the aligned rung rows.");
             }
             var (id, revision) = ReviewRevision("comparison-sessions", request.Id, request.ExpectedRevision);

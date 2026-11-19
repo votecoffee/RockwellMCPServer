@@ -1,9 +1,11 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using System.ComponentModel.DataAnnotations;
 
 namespace Studio5000.Core;
 
-public sealed record LadderPreviewRequest(string ExpectedSha256, string RoutineXPath, int Offset = 0, int Limit = 5);
+public sealed record LadderPreviewRequest(string ExpectedSha256, string RoutineXPath, [property: Range(0, 100000)] int Offset = 0,
+    [property: Range(1, 20)] int Limit = 5, bool IncludeDrawings = true);
 public sealed record LadderNode(int Id, string Kind, string Instruction, string[] Operands, int X, int Y, int Width, int Height);
 public sealed record LadderWire(int X1, int Y1, int X2, int Y2);
 public sealed record LadderDiagram(int Width, int Height, LadderNode[] Nodes, LadderWire[] Wires, string Svg);
@@ -198,14 +200,14 @@ public static class LadderPreview
         var rows = all.Skip(request.Offset).Take(request.Limit).Select((rung, i) =>
         {
             var text = (string?)rung.Element("Text") ?? ""; var comment = ProjectDocumentation.DisplayText(rung.Element("Comment")) ?? "";
-            LadderDiagram? diagram = null; string[] diagnostics = []; var status = "rendered";
-            try { diagram = Render(text); }
+            LadderDiagram? diagram = null; string[] diagnostics = []; var status = request.IncludeDrawings ? "rendered" : "text-only";
+            try { if (request.IncludeDrawings) diagram = Render(text); }
             catch (OperationException ex) { status = ex.Code == "ladder_limit" ? "unsupported" : "invalid"; diagnostics = [ex.Message]; }
             return new LadderRungPreview(request.Offset + i, (string?)rung.Attribute("Number"), (string?)rung.Parent?.Attribute("OnlineEditType"),
                 text.Length > 65536 ? text[..65536] : text, text.Length > 65536, comment.Length > 4096 ? comment[..4096] : comment, comment.Length > 4096, status, diagnostics, diagram);
         }).ToArray();
         var result = new LadderPreviewReport(project, request.RoutineXPath, all.Length, request.Offset, request.Limit, rows,
-            "Read-only structural rendering of balanced instruction calls and bracket or BST/NXB/BND branches. Unknown instructions/AOIs are generic blocks; operands are preserved, not evaluated. No instruction validation, live power-flow, simulation, native Studio acceptance or controller connection.");
+            (request.IncludeDrawings ? "Read-only structural rendering of balanced instruction calls and bracket or BST/NXB/BND branches. Unknown instructions/AOIs are generic blocks; operands are preserved, not evaluated. " : "Text-only saved source/comments; parsing and drawing generation are not performed. ") + "No instruction validation, live power-flow, simulation, native Studio acceptance or controller connection.");
         if (JsonSerializer.SerializeToUtf8Bytes(result, ProjectService.Json).Length > 4 * 1024 * 1024)
             throw new OperationException("ladder_page_too_large", "Ladder preview exceeds 4 MiB; request a smaller limit.");
         return result;

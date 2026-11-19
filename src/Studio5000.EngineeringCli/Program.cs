@@ -14,7 +14,7 @@ internal sealed record CliRequest(string Operation, string Input, int TimeoutSec
 
 internal static class EngineeringCli
 {
-    internal const string Version = "2.8.3";
+    internal const string Version = "2.9.0";
     internal const string JobEnvironment = "ROCKWELL_ENGINEERING_OWNED_JOB";
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { MaxDepth = 128 };
     internal static readonly JsonSerializerOptions StrictJson = new(Json)

@@ -2,17 +2,20 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
+using System.ComponentModel.DataAnnotations;
 
 namespace Studio5000.Core;
 
 public sealed record ProjectCompareRequest(string LeftProjectId, string LeftSha256, string RightProjectId, string RightSha256,
-    string? Query = null, int Offset = 0, int Limit = 100, bool IncludeRungNumbers = false,
+    string? Query = null, [property: Range(0, 100000)] int Offset = 0, [property: Range(1, 200)] int Limit = 100, bool IncludeRungNumbers = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ProgramName = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RoutineName = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RoutineName = null,
+    [property: AllowedValues("exact", "instructions", "annotation-blank-lines"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RoutineView = null);
 public sealed record ProjectDifference(string Kind, string Path, string Change, string? LeftXPath, string? RightXPath,
     string? LeftSha256, string? RightSha256, string? LeftXml, string? RightXml, bool LeftTruncated, bool RightTruncated);
 public sealed record ProjectComparisonReport(ProjectInfo Left, ProjectInfo Right, int TotalChanges, int FilteredChanges,
-    int Added, int Removed, int Modified, int Offset, int Limit, ProjectDifference[] Differences, string Boundary);
+    int Added, int Removed, int Modified, int Offset, int Limit, ProjectDifference[] Differences, string Boundary,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ComparisonViewInfo? View = null);
 
 public static class ProjectComparison
 {
@@ -33,9 +36,10 @@ public static class ProjectComparison
             throw new OperationException("invalid_comparison", "Use offset 0..100000, limit 1..200 and a query up to 256 characters.");
         ValidateSize(leftDocument, MaximumAnalysisElements); ValidateSize(rightDocument, MaximumAnalysisElements);
         ValidateScope(request);
+        var view = RoutineComparisonViews.Info(request.RoutineView);
         var changes = new List<ProjectDifference>();
         var addedCount = 0; var removedCount = 0; var modifiedCount = 0; var filteredCount = 0;
-        string Canon(XElement element, bool header = false) => Normalize(element, request.IncludeRungNumbers, header).ToString(SaveOptions.DisableFormatting);
+        string? Canon(XElement element, bool header = false) => RoutineComparisonViews.Canon(element, request.IncludeRungNumbers, request.RoutineView, header);
         void Add(XElement? a, XElement? b, string path, bool header = false)
         {
             if (!header && XNode.DeepEquals(a, b)) return;
@@ -69,7 +73,7 @@ public static class ProjectComparison
                 var oldRungs = a.Elements().ToArray(); var newRungs = b.Elements().ToArray();
                 if (oldRungs.Any(e => e.Name != "Rung") || newRungs.Any(e => e.Name != "Rung"))
                     throw new OperationException("unsupported_comparison", "RLLContent contains unsupported non-rung elements.");
-                var matches = Align(oldRungs.Select(e => Canon(e)).ToArray(), newRungs.Select(e => Canon(e)).ToArray());
+                var matches = Align(oldRungs.Select(e => Canon(e)!).ToArray(), newRungs.Select(e => Canon(e)!).ToArray());
                 var removed = new List<int>(); var added = new List<int>();
                 void Flush()
                 {
@@ -119,7 +123,7 @@ public static class ProjectComparison
         else Walk(leftDocument.Root, rightDocument.Root, root);
         var result = new ProjectComparisonReport(left, right, addedCount + removedCount + modifiedCount, filteredCount,
             addedCount, removedCount, modifiedCount, request.Offset, allMatches ? filteredCount : request.Limit, changes.ToArray(),
-            "Structural XML comparison only. Counts cover the selected program/routine or the entire project when unscoped. Attribute order/formatting indentation and root ExportDate/Controller LastModifiedDate are ignored; scalar text, stored values, UDT member/AOI parameter order and unknown component XML remain significant. Rung numbers are optional. LCS aligns rung occurrences; moves are not inferred. No native semantic equivalence or runtime validation.");
+            "Structural XML comparison only. Counts cover the selected program/routine or the entire project when unscoped. Attribute order/formatting indentation and root ExportDate/Controller LastModifiedDate are ignored; scalar text, stored values, UDT member/AOI parameter order and unknown component XML remain significant. Rung numbers are optional. LCS aligns rung occurrences; moves are not inferred. No native semantic equivalence or runtime validation." + (view is null ? "" : " " + view.Boundary), view);
         if (!allMatches && JsonSerializer.SerializeToUtf8Bytes(result, ProjectService.Json).Length > 4 * 1024 * 1024)
             throw new OperationException("comparison_page_too_large", "Comparison page exceeds 4 MiB; request a smaller limit.");
         return result;

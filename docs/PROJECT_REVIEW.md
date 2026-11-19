@@ -2,11 +2,45 @@
 
 These read-only operations use registered Logix snapshots. They preserve source files and managed revisions, require current hashes, and connect to no controller. ACD inputs must already have been registered through the separately configured SDK conversion path.
 
+CLI 2.9.0 publishes the actual paging bounds: `studio_compare_projects` and `studio_compare_routines` accept `limit` 1..200; `studio_compare_ladder` and `studio_ladder_preview` accept 1..20. All four accept `offset` 0..100000. `operation-help` includes `minimum`/`maximum`, enforced by both the extension argument validator and the service.
+
+## Optional routine views and text-only ladder
+
+The default remains `routineView: "exact"` (or omit/null), with the existing XML/rung normalization and significant annotations. On project, routine-tree and ladder comparisons, explicitly choose:
+
+- `annotation-blank-lines`: remove lines containing only XML space/tab and normalize CRLF/CR to LF in known readable RLL/ST routine descriptions and RLL rung comments, including their localized text. Nonblank lines, their spacing and annotation structure remain significant.
+- `instructions`: exclude those known XML routine descriptions and rung comments. Instruction text remains exact, including whitespace, quoted literals and inline ST/code comments. Routine metadata remains significant. This is a view of instruction text with documentation excluded, not an instruction parser or semantic comparison.
+
+Tags, captured values, UDTs, module/task configuration, unknown annotation locations, unsupported FBD/SFC and opaque/encoded routines retain the default comparison. No ciphertext equivalence or machine-identity/address substitution is inferred. The request never rewrites a source or creates a normalized PLC file.
+
+Nondefault reports include `view.mode` and its boundary. Routine pairs and rung pairs additionally report `exactChange` under the default view, alongside the selected view's `change`. Original file hashes remain in `left`/`right`. Component difference hashes refer to the selected normalized view, not the original file bytes. Rung previews still contain original raw code and comments. Re-run the exact view to inventory the full annotation differences. Saved comparison sessions, JSON/HTML review artifacts and reopened review history retain the selected mode; old immutable reports are unchanged.
+
+For an efficient CLI ladder page, use this `arguments` object after obtaining exact routine selectors from `studio_compare_routines`:
+
+```json
+{
+  "request": {
+    "leftProjectId": "<left-id>", "leftSha256": "<left-original-hash>",
+    "rightProjectId": "<right-id>", "rightSha256": "<right-original-hash>",
+    "leftRoutineXPath": "<exact-left-RLL-selector>",
+    "rightRoutineXPath": "<exact-right-RLL-selector>",
+    "routineView": "instructions",
+    "includeDrawings": false,
+    "changesOnly": true,
+    "offset": 0, "limit": 20
+  }
+}
+```
+
+`includeDrawings: false` also works on `studio_ladder_preview` and `studio_compare_locate`. It skips instruction parsing, geometry and SVG generation. Each present side has `status: "text-only"`, `diagram: null`, original code/comments, source occurrence indexes and truncation flags. Empty parse diagnostics in this mode do not establish valid logic. Alignment, paging, hashes, the 64 KiB raw-code/4096-character comment caps and the 4 MiB response bound remain enforced. `changesOnly` follows the selected view; aligned positions still refer to the unfiltered sequence. Keep hashes, mode and selectors fixed across pages.
+
 ## Desktop views
 
 Open **Compare projects…** to open left/right ACD/L5X files or choose registered snapshots, refresh their hashes, compare, filter component paths and page results. The **XML differences** tab shows normalized before/after XML for the selected change. Snippets are explicitly marked when truncated. Changing a snapshot clears the old result; comparison never migrates or applies components. The implementation does not invoke the Studio 5000 compare tool.
 
 The **Ladder comparison browser** tab groups routine pairs by program/AOI, including unchanged, added and removed routines. Filter routine names/owners and page the routine tree. Select an RLL pair, then use **Previous rung** / **Next rung** to browse aligned occurrences side by side. **Changed rungs only** hides equal pairs. Insertions/deletions leave an explicit empty side; following matching rungs retain their own original source positions. Each side has an independently scrollable drawing and raw source/comments/diagnostics. Non-RLL routines remain available in the XML comparison. Unknown or malformed ladder keeps its text/diagnostics even when a drawing cannot be made.
+
+The comparison toolbar also offers **Exact routine annotations**, **Ignore blank annotation lines**, and **Ignore routine annotations**. The choice applies to both XML comparison and the routine/ladder browser. The tree identifies a differing exact classification, and the current view is shown with results. Compare again after changing it; saving/exporting cannot silently use another mode.
 
 Open **Ladder preview…**, select a snapshot, filter/find routines, then select an RLL routine and **Load routine**. Previous/Next selects a rung occurrence, including online-edit variants. Scroll the drawing for wide branches. Raw code, comments and parse diagnostics remain below; unsupported/malformed rungs have no drawing. The desktop consumes Core's drawing geometry rather than parsing rung text independently.
 

@@ -118,7 +118,7 @@ public sealed class ComparisonLadderPanel : UserControl
             var owner = routines.Nodes.Add(group.Key);
             foreach (var r in group)
             {
-                var node = owner.Nodes.Add($"{r.Name} · {r.Change} · {r.LeftRungs}/{r.RightRungs}"); node.Tag = r;
+                var node = owner.Nodes.Add($"{r.Name} · {r.Change} · {r.LeftRungs}/{r.RightRungs}" + (r.ExactChange is not null && r.ExactChange != r.Change ? $" · exact: {r.ExactChange}" : "")); node.Tag = r;
                 node.ForeColor = r.Change == "unchanged" ? Color.DimGray : r.Change == "added" ? Color.DarkGreen : r.Change == "removed" ? Color.DarkRed : Color.DarkBlue;
             }
         }
@@ -136,7 +136,7 @@ public sealed class ComparisonLadderPanel : UserControl
         if ((selected.LeftType ?? "RLL") != "RLL" || (selected.RightType ?? "RLL") != "RLL") { status.Text = "Select an RLL pair. Non-ladder routines are compared in the XML view."; return; }
         var current = projects; var routine = selected;
         var value = await client.PostAsync<LadderComparisonReport>("/api/projects/compare/ladder", new LadderCompareRequest(current.LeftProjectId, current.LeftSha256, current.RightProjectId, current.RightSha256,
-            routine.LeftXPath, routine.RightXPath, rungOffset, 1, current.IncludeRungNumbers, changed.Checked));
+            routine.LeftXPath, routine.RightXPath, rungOffset, 1, current.IncludeRungNumbers, changed.Checked, RoutineView: current.RoutineView));
         if (projects == current && selected == routine) Show(value);
     }
     private void Show(LadderComparisonReport value)
@@ -144,7 +144,7 @@ public sealed class ComparisonLadderPanel : UserControl
         report = value; var rung = value.Rungs.FirstOrDefault(); left.Set(rung?.Left?.Diagram); right.Set(rung?.Right?.Diagram);
         static string Text(LadderRungPreview? r) => r is null ? "(No rung on this side)" : $"Source position {r.Index} · rung {r.Number ?? "unnumbered"} · {r.Status}\r\n{r.Comment}\r\n{r.RawText}\r\n" + string.Join("\r\n", r.Diagnostics) + (r.RawTruncated || r.CommentTruncated ? "\r\nDisplay truncated; inspect/export source XML." : "");
         leftText.Text = Text(rung?.Left); rightText.Text = Text(rung?.Right);
-        status.Text = rung is null ? "No matching rungs. Empty routines and unchanged-only filters can have no rows." : $"{selected?.Owner}/{selected?.Name} · aligned row {rung.Position + 1} · {rung.Change} · page {value.Offset + 1}/{value.Total}. Saved structure; no live power-flow or simulation.";
+        status.Text = rung is null ? "No matching rungs. Empty routines and unchanged-only filters can have no rows." : $"{selected?.Owner}/{selected?.Name} · aligned row {rung.Position + 1} · {rung.Change} · page {value.Offset + 1}/{value.Total} · view {value.View?.Mode ?? "exact"}. Saved structure; no live power-flow or simulation.";
     }
     public void LoadForTest()
     {

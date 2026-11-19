@@ -34,7 +34,7 @@ public sealed record WorkerReply(bool Success, JsonElement? Value = null, string
 // Deliberately bounded schema vocabulary. Unknown keywords are rejected, never silently ignored.
 public static class ExtensionSchema
 {
-    private static readonly HashSet<string> Keywords = ["type", "properties", "required", "additionalProperties", "items", "enum", "description"];
+    private static readonly HashSet<string> Keywords = ["type", "properties", "required", "additionalProperties", "items", "enum", "description", "minimum", "maximum"];
     public static void CheckDefinition(JsonElement schema, int depth = 0)
     {
         if (depth > 24 || schema.ValueKind != JsonValueKind.Object) throw new ArgumentException("Invalid extension schema depth/object.");
@@ -53,8 +53,11 @@ public static class ExtensionSchema
                 case "required": foreach (var child in p.Value.EnumerateArray()) if (child.ValueKind != JsonValueKind.String) throw new ArgumentException("Invalid required property."); break;
                 case "enum": if (p.Value.ValueKind != JsonValueKind.Array || p.Value.GetArrayLength() == 0) throw new ArgumentException("Invalid enum."); break;
                 case "description": if (p.Value.ValueKind != JsonValueKind.String) throw new ArgumentException("Invalid description."); break;
+                case "minimum" or "maximum": if (p.Value.ValueKind != JsonValueKind.Number || !p.Value.TryGetDecimal(out _)) throw new ArgumentException("Invalid numeric bound."); break;
             }
         }
+        if (schema.TryGetProperty("minimum", out var min) && schema.TryGetProperty("maximum", out var max) && min.GetDecimal() > max.GetDecimal())
+            throw new ArgumentException("Minimum exceeds maximum.");
     }
     public static void Validate(JsonElement schema, JsonElement value, string path = "$", int depth = 0)
     {
@@ -72,6 +75,11 @@ public static class ExtensionSchema
                 throw new ArgumentException(path + " has the wrong JSON type.");
         }
         if (schema.TryGetProperty("enum", out var choices) && !choices.EnumerateArray().Any(x => x.GetRawText() == value.GetRawText())) throw new ArgumentException(path + " is outside the enum.");
+        if (value.ValueKind == JsonValueKind.Number && (schema.TryGetProperty("minimum", out _) || schema.TryGetProperty("maximum", out _)))
+        {
+            if (!value.TryGetDecimal(out var number) || schema.TryGetProperty("minimum", out var min) && number < min.GetDecimal() ||
+                schema.TryGetProperty("maximum", out var max) && number > max.GetDecimal()) throw new ArgumentException(path + " is outside the numeric bounds.");
+        }
         if (value.ValueKind == JsonValueKind.Object)
         {
             if (schema.TryGetProperty("required", out var required)) foreach (var key in required.EnumerateArray())
